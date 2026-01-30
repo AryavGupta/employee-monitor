@@ -1,0 +1,309 @@
+/* UserModal.css - Modern Modal Styles */
+
+.user-modal {
+  position: relative;
+  padding: 0;
+  background: white;
+  border-radius: 16px;
+  max-width: 480px;
+  width: 100%;
+}
+
+.modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  background: #f1f5f9;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  z-index: 1;
+}
+
+.modal-close svg {
+  width: 18px;
+  height: 18px;
+  color: #64748b;
+}
+
+.modal-close:hover {
+  background: #e2e8f0;
+}
+
+.modal-close:hover svg {
+  color: #0f172a;
+}
+
+.modal-header {
+  padding: 32px 32px 0;
+  text-align: center;
+}
+
+.modal-header .modal-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.modal-header .modal-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.modal-header .modal-icon.create {
+  background: #0f172a;
+  color: white;
+}
+
+.modal-header .modal-icon.edit {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.modal-header .modal-icon.resetPassword {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.modal-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 4px;
+}
+
+.modal-subtitle {
+  color: #64748b;
+  font-size: 14px;
+}
+
+.modal-form {
+  padding: 24px 32px 32px;
+}
+
+.form-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+  border-radius: 8px;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.form-error svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.modal-form .form-group {
+  margin-bottom: 20px;
+}
+
+.modal-form .form-group label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: #0f172a;
+  margin-bottom: 6px;
+}
+
+.modal-form .form-group input,
+.modal-form .form-group select {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: all 0.15s ease;
+  background: white;
+  color: #0f172a;
+}
+
+.modal-form .form-group input:focus,
+.modal-form .form-group select:focus {
+  outline: none;
+  border-color: #0f172a;
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08);
+}
+
+.modal-form .form-group input.error,
+.modal-form .form-group select.error {
+  border-color: #dc2626;
+  background: #fef2f2;
+}
+
+.modal-form .form-group input:disabled,
+.modal-form .form-group select:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.modal-form .form-group input::placeholder {
+  color: #94a3b8;
+}
+
+.error-text {
+  display: block;
+  color: #dc2626;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.password-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-input input {
+  padding-right: 44px;
+}
+
+.password-input .password-toggle {
+  position: absolute;
+  right: 10px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+}
+
+.password-input .password-toggle:hover {
+  background: #f1f5f9;
+}
+
+.password-input .password-toggle svg {
+  width: 18px;
+  height: 18px;
+  color: #94a3b8;
+  transition: color 0.15s ease;
+}
+
+.password-input .password-toggle:hover svg {
+  color: #0f172a;
+}
+
+.modal-form .modal-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+  justify-content: flex-end;
+}
+
+.modal-form .btn-secondary {
+  padding: 10px 20px;
+  background: white;
+  color: #0f172a;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.modal-form .btn-secondary:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.modal-form .btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modal-form .btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: #0f172a;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-width: 120px;
+}
+
+.modal-form .btn-primary:hover:not(:disabled) {
+  background: #1e293b;
+}
+
+.modal-form .btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spinner-small {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Responsive */
+@media (max-width: 540px) {
+  .user-modal {
+    margin: 16px;
+    max-height: calc(100vh - 32px);
+  }
+
+  .modal-header,
+  .modal-form {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-form .modal-actions {
+    flex-direction: column-reverse;
+  }
+
+  .modal-form .btn-secondary,
+  .modal-form .btn-primary {
+    width: 100%;
+    justify-content: center;
+  }
+}

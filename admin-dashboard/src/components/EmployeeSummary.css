@@ -1,0 +1,296 @@
+/* EmployeeSummary.css - Modern Employee Summary Styles */
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 20px;
+  padding: 16px 0;
+}
+
+.summary-card {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  border: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: all 0.15s ease;
+}
+
+.summary-card:hover {
+  border-color: #cbd5e1;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.card-header strong {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.card-header .email {
+  font-size: 13px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.team-badge {
+  background: #dbeafe;
+  color: #2563eb;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.time-stats {
+  display: flex;
+  gap: 24px;
+}
+
+.time-stats .stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.time-stats .label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.time-stats .value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-top: 2px;
+}
+
+.activity-bar {
+  height: 8px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.activity-bar .active-fill {
+  height: 100%;
+  background: #16a34a;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.screenshots-info {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.ai-section {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 16px;
+  margin-top: auto;
+}
+
+.ai-summary strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.ai-summary p {
+  color: #0f172a;
+  line-height: 1.6;
+  margin: 0;
+  font-size: 14px;
+}
+
+.apps-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.app-tag {
+  background: #f8fafc;
+  color: #64748b;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid #e2e8f0;
+}
+
+.analyze-btn {
+  width: 100%;
+  padding: 12px;
+  background: #0f172a;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.analyze-btn:hover {
+  background: #1e293b;
+}
+
+.analyze-btn:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
+
+.analysis-failed {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #dc2626;
+  font-size: 14px;
+  padding: 12px;
+  background: #fef2f2;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+}
+
+.analysis-failed button {
+  background: white;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.analysis-failed button:hover {
+  background: #fee2e2;
+}
+
+.no-screenshots {
+  color: #94a3b8;
+  font-size: 14px;
+  text-align: center;
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.header-actions input[type="date"] {
+  padding: 10px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #0f172a;
+  background: white;
+  transition: border-color 0.15s ease;
+}
+
+.header-actions input[type="date"]:focus {
+  outline: none;
+  border-color: #0f172a;
+}
+
+.btn-secondary {
+  background: white;
+  color: #0f172a;
+  border: 1px solid #e2e8f0;
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 14px;
+  transition: all 0.15s ease;
+}
+
+.btn-secondary:hover {
+  background: #f8fafc;
+  border-color: #0f172a;
+}
+
+.role-filter {
+  padding: 10px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 14px;
+  background: white;
+  color: #0f172a;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.role-filter:focus {
+  outline: none;
+  border-color: #0f172a;
+}
+
+.badges {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.role-badge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.role-badge.admin {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.role-badge.employee {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.role-badge.team_manager {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .header-actions {
+    flex-wrap: wrap;
+  }
+
+  .time-stats {
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+}

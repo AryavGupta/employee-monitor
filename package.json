@@ -1,0 +1,95 @@
+{
+  "name": "employee-monitoring-system",
+  "version": "1.0.0",
+  "description": "Desktop employee monitoring application with screenshot capture",
+  "main": "desktop-app/main.js",
+  "scripts": {
+    "start:desktop": "electron desktop-app/main.js",
+    "start:backend": "node backend/server.js",
+    "start:frontend": "cd admin-dashboard && npm start",
+    "dev:backend": "nodemon backend/server.js",
+    "build:desktop": "electron-builder --win",
+    "build:desktop:dir": "electron-builder --win --dir"
+  },
+  "keywords": [
+    "employee-monitoring",
+    "screenshot",
+    "tracking"
+  ],
+  "author": "Your Company",
+  "license": "ISC",
+  "build": {
+    "appId": "com.employeemonitor.app",
+    "productName": "Employee Monitor",
+    "copyright": "Copyright (c) 2024",
+    "directories": {
+      "output": "dist",
+      "buildResources": "desktop-app/assets"
+    },
+    "files": [
+      "desktop-app/**/*",
+      "!desktop-app/.env",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop-app/assets/",
+        "to": "assets/",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "desktop-app/assets/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Employee Monitor",
+      "runAfterFinish": true
+    },
+    "portable": {
+      "artifactName": "EmployeeMonitor-Portable-${version}.${ext}"
+    }
+  },
+  "dependencies": {
+    "auto-launch": "^5.0.6",
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "electron": "^27.1.0",
+    "electron-builder": "^24.9.1",
+    "png-to-ico": "^3.0.1"
+  },
+  "optionalDependencies": {
+    "aws-sdk": "^2.1478.0",
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "nodemon": "^3.0.2",
+    "pg": "^8.11.3",
+    "socket.io": "^4.7.2",
+    "socket.io-client": "^4.7.2"
+  }
+}
