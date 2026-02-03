@@ -3,6 +3,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const router = express.Router();
+const { sendWelcomeEmail, isEmailConfigured } = require('../services/emailService');
 
 // JWT_SECRET is required - no fallback to prevent security vulnerabilities
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -81,7 +82,7 @@ router.post('/login', async (req, res) => {
 // Register new user (admin only)
 router.post('/register', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
-    const { email, password, fullName, role, teamId } = req.body;
+    const { email, password, fullName, role, teamId, sendEmail } = req.body;
     const pool = req.app.locals.pool;
 
     if (!email || !password || !fullName || !role) {
@@ -104,9 +105,40 @@ router.post('/register', authenticateToken, authorizeAdmin, async (req, res) => 
       [req.user.userId, 'CREATE_USER', 'user', result.rows[0].id]
     );
 
-    res.status(201).json({ success: true, message: 'User created successfully', user: result.rows[0] });
+    // Send welcome email if requested and email service is configured
+    let emailSent = false;
+    let emailError = null;
+    if (sendEmail) {
+      if (isEmailConfigured()) {
+        const emailResult = await sendWelcomeEmail(email.toLowerCase(), fullName, password);
+        emailSent = emailResult.success;
+        if (!emailResult.success) {
+          emailError = emailResult.error;
+        }
+      } else {
+        emailError = 'Email service not configured';
+      }
+    }
+
+    const message = emailSent
+      ? 'User created and welcome email sent'
+      : sendEmail && emailError
+        ? `User created but email failed: ${emailError}`
+        : 'User created successfully';
+
+    res.status(201).json({
+      success: true,
+      message,
+      user: result.rows[0],
+      emailSent,
+      emailConfigured: isEmailConfigured()
+    });
   } catch (error) {
     console.error('Registration error:', error);
+    // Handle PostgreSQL unique constraint violation (code 23505)
+    if (error.code === '23505' && error.constraint && error.constraint.includes('email')) {
+      return res.status(409).json({ success: false, message: 'User with this email already exists' });
+    }
     res.status(500).json({ success: false, message: 'Registration failed. Please try again.' });
   }
 });

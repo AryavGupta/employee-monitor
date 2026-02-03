@@ -24,11 +24,14 @@ employee-monitor/
 ├── admin-dashboard/     # React frontend + Express API (Vercel)
 │   ├── src/components/  # React UI components
 │   ├── api/routes/      # Express API endpoints (Vercel serverless)
+│   ├── api/services/    # Backend services (email, AI)
 │   └── supabase-schema.sql
 └── desktop-app/         # Electron app for Windows/Mac/Linux
     ├── main.js          # Main process - tracking, screenshots
+    ├── preload.js       # Secure IPC bridge
     ├── login.html       # Login UI
-    └── tracking.html    # Tracking status UI
+    ├── tracking.html    # Tracking status UI
+    └── settings.html    # Password change & settings UI
 ```
 
 ## Tech Stack
@@ -39,6 +42,7 @@ employee-monitor/
 - Recharts - Analytics charts
 - date-fns - Date handling
 - jspdf/papaparse - Report exports
+- nodemailer - Email notifications (optional)
 
 **Desktop App:**
 - Electron - Cross-platform desktop
@@ -95,6 +99,7 @@ Key tables:
 4. Tracks: active app, window title, URL (browsers), idle time
 5. Batches activity logs (6 entries) before sending
 6. Runs in system tray when minimized
+7. Settings page allows password change without logging out
 
 ## Deployment
 
@@ -130,6 +135,16 @@ ADMIN_SETUP_KEY=your-random-setup-key              # For /api/auth/reset-admin e
 
 # Optional: AI features
 GEMINI_API_KEY=your-gemini-api-key
+
+# Optional: Email (for sending user credentials on registration)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-email@gmail.com
+SMTP_PASS=your-app-password
+SMTP_FROM=noreply@yourcompany.com
+APP_NAME=Employee Monitor
+COMPANY_NAME=Your Company
 ```
 
 **Security Notes:**
@@ -148,6 +163,8 @@ GEMINI_API_KEY=your-gemini-api-key
 - Productivity analytics & reports
 - Configurable monitoring settings per team
 - Export reports (PDF/CSV)
+- Email credentials to new employees (optional SMTP)
+- Desktop app password change (Settings page)
 
 ---
 
@@ -278,3 +295,19 @@ GEMINI_API_KEY=your-gemini-api-key
 * **Falsy value bug in activity logging**: `durationSeconds || null` and `isIdle || false` would incorrectly convert `0` and `false` to `null`/default. Fixed by using nullish coalescing (`??`) instead of logical OR (`||`).
   * **Affected files**: `api/routes/activity.js` lines 19, 45
   * **Prevention**: Always use `??` for values where `0` or `false` are valid
+
+* **Delete modal not closing on error** (February 2026): When deleting a user failed, the confirmation modal stayed open and the error message appeared behind it, invisible to user. Fixed by closing modal and clearing state in the catch block.
+  * **Affected files**: `admin-dashboard/src/components/Users.js`
+  * **Prevention**: Always close modals/dialogs in both success AND error paths.
+
+* **Gmail SMTP failing in Vercel serverless** (February 2026): Email worked locally but failed on Vercel. Root cause: transporter was cached globally (`let transporter = null`) which causes stale connections in serverless. Fixed by creating fresh transporter per request and using Gmail's `service: 'gmail'` shortcut with timeout settings.
+  * **Affected files**: `admin-dashboard/api/services/emailService.js`
+  * **Prevention**: Never cache connections/clients globally in serverless functions. Create fresh instances per request.
+
+* **Audit log insert breaking user delete** (February 2026): Delete operation succeeded but returned error because audit log INSERT failed (possibly missing column in user's DB). Fixed by wrapping audit log in try-catch so it doesn't break the main operation.
+  * **Affected files**: `admin-dashboard/api/routes/users.js`
+  * **Prevention**: Non-critical operations (logging, analytics) should never break critical operations. Wrap in try-catch.
+
+* **Error messages not visible when scrolled** (February 2026): Error/success alerts at top of page weren't visible if user had scrolled down. Fixed by implementing Toast notifications that appear at fixed bottom-right position regardless of scroll.
+  * **Affected files**: `admin-dashboard/src/components/Toast.js` (new), `admin-dashboard/src/components/Toast.css` (new), `admin-dashboard/src/components/Users.js`
+  * **Prevention**: Use fixed-position toast/snackbar components for feedback messages, not inline alerts.

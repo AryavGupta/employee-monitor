@@ -486,6 +486,55 @@ ipcMain.on('get-tracking-status', (event) => {
   });
 });
 
+// Change password handler
+ipcMain.on('change-password', async (event, { currentPassword, newPassword }) => {
+  try {
+    const response = await axios.post(
+      `${CONFIG.API_URL}/api/auth/change-password`,
+      { currentPassword, newPassword },
+      {
+        headers: { Authorization: `Bearer ${CONFIG.USER_TOKEN}` },
+        timeout: 10000
+      }
+    );
+
+    if (response.data.success) {
+      event.reply('change-password-response', { success: true, message: 'Password changed successfully' });
+    } else {
+      event.reply('change-password-response', { success: false, message: response.data.message || 'Failed to change password' });
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || 'Failed to change password. Please try again.';
+    event.reply('change-password-response', { success: false, message });
+  }
+});
+
+// Open settings page
+ipcMain.on('open-settings', (event) => {
+  if (mainWindow) {
+    mainWindow.loadFile(path.join(__dirname, 'settings.html'));
+  }
+});
+
+// Navigate to different pages
+ipcMain.on('navigate-to', (event, page) => {
+  if (!mainWindow) return;
+
+  switch (page) {
+    case 'tracking':
+      mainWindow.loadFile(path.join(__dirname, 'tracking.html'));
+      break;
+    case 'login':
+      mainWindow.loadFile(path.join(__dirname, 'login.html'));
+      break;
+    case 'settings':
+      mainWindow.loadFile(path.join(__dirname, 'settings.html'));
+      break;
+    default:
+      console.log('Unknown page:', page);
+  }
+});
+
 // =====================================================
 // Team Settings
 // =====================================================

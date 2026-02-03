@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import Sidebar from './Sidebar';
 import UserModal from './UserModal';
+import Toast from './Toast';
 import './Users.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -128,8 +129,10 @@ function Users({ user, onLogout }) {
 
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
+      setShowDeleteConfirm(false);
+      setUserToDelete(null);
       setError(err.response?.data?.message || 'Failed to delete user');
-      setTimeout(() => setError(''), 3000);
+      setTimeout(() => setError(''), 5000);
     }
   };
 
@@ -156,12 +159,12 @@ function Users({ user, onLogout }) {
 
     try {
       if (modalMode === 'create') {
-        await axios.post(
+        const response = await axios.post(
           `${API_URL}/api/auth/register`,
           formData,
           { headers: { Authorization: `Bearer ${token}` } }
         );
-        setSuccess('User created successfully');
+        setSuccess(response.data.message || 'User created successfully');
       } else if (modalMode === 'edit') {
         await axios.patch(
           `${API_URL}/api/users/${selectedUser.id}`,
@@ -223,23 +226,17 @@ function Users({ user, onLogout }) {
           </button>
         </div>
 
-        {/* Messages */}
-        {error && (
-          <div className="alert alert-error">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor"/>
-            </svg>
-            {error}
-          </div>
-        )}
-        {success && (
-          <div className="alert alert-success">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="currentColor"/>
-            </svg>
-            {success}
-          </div>
-        )}
+        {/* Toast Notifications */}
+        <Toast
+          message={error}
+          type="error"
+          onClose={() => setError('')}
+        />
+        <Toast
+          message={success}
+          type="success"
+          onClose={() => setSuccess('')}
+        />
 
         {/* Filters */}
         <div className="filters-bar">

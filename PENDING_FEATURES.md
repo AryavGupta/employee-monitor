@@ -46,6 +46,61 @@
 
 ## Recently Completed
 
+### Admin Email Credentials + Employee Password Change (February 2026)
+**What changed:**
+- Admin can now send login credentials via email when creating a new user
+- Desktop app has a Settings page where employees can change their password
+
+**Admin Dashboard Changes:**
+1. Added `nodemailer` dependency for SMTP email delivery
+2. Created `api/services/emailService.js` with `sendWelcomeEmail()` function
+3. Updated `/api/auth/register` endpoint to accept `sendEmail` parameter
+4. Added checkbox "Send login credentials via email" to UserModal (default checked)
+5. Styled email welcome template with company branding
+
+**Desktop App Changes:**
+1. Created `settings.html` - Password change form with validation
+2. Updated `preload.js` - Added `change-password`, `open-settings`, `navigate-to` IPC channels
+3. Updated `main.js` - Added handlers for password change and page navigation
+4. Added settings button (gear icon) to tracking page
+
+**New Files:**
+- `admin-dashboard/api/services/emailService.js`
+- `desktop-app/settings.html`
+
+**Files Modified:**
+- `admin-dashboard/package.json` - Added nodemailer
+- `admin-dashboard/api/routes/auth.js` - Email on register
+- `admin-dashboard/src/components/UserModal.js` - sendEmail checkbox
+- `admin-dashboard/src/components/UserModal.css` - Checkbox styles
+- `admin-dashboard/.env.example` - SMTP variables
+- `desktop-app/preload.js` - New IPC channels
+- `desktop-app/main.js` - New IPC handlers
+- `desktop-app/tracking.html` - Settings button
+
+**New Environment Variables (all optional):**
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-email@gmail.com
+SMTP_PASS=your-app-password
+SMTP_FROM=noreply@yourcompany.com
+APP_NAME=Employee Monitor
+COMPANY_NAME=Your Company
+```
+
+**Verification:**
+1. Create user without email checkbox → user created, no email
+2. Create user with email checkbox (SMTP configured) → user created + email sent
+3. Create user with email checkbox (SMTP not configured) → user created, warning shown
+4. Desktop app: Settings button visible → opens settings page
+5. Desktop app: Change password with correct current password → success
+6. Desktop app: Change password with wrong current password → error
+7. Desktop app: Back button returns to tracking page
+
+---
+
 ### Security Vulnerability Fixes (January 2026)
 **Problem:**
 Comprehensive security audit identified multiple critical vulnerabilities in the codebase.

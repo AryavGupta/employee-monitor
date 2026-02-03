@@ -8,7 +8,8 @@ function UserModal({ mode, user, teams, onClose, onSubmit }) {
     confirmPassword: '',
     fullName: '',
     role: 'employee',
-    teamId: ''
+    teamId: '',
+    sendEmail: true
   });
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
@@ -49,7 +50,8 @@ function UserModal({ mode, user, teams, onClose, onSubmit }) {
         confirmPassword: '',
         fullName: '',
         role: 'employee',
-        teamId: ''
+        teamId: '',
+        sendEmail: true
       });
     }
   }, [mode, user]);
@@ -132,7 +134,8 @@ function UserModal({ mode, user, teams, onClose, onSubmit }) {
           password: formData.password,
           fullName: formData.fullName.trim(),
           role: formData.role,
-          teamId: formData.teamId || null
+          teamId: formData.teamId || null,
+          sendEmail: formData.sendEmail
         };
       } else if (mode === 'edit') {
         submitData = {
@@ -339,6 +342,27 @@ function UserModal({ mode, user, teams, onClose, onSubmit }) {
                 />
                 {errors.confirmPassword && <span className="error-text">{errors.confirmPassword}</span>}
               </div>
+
+              {mode === 'create' && (
+                <div className="form-group checkbox-group">
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      name="sendEmail"
+                      checked={formData.sendEmail}
+                      onChange={(e) => setFormData(prev => ({ ...prev, sendEmail: e.target.checked }))}
+                      disabled={loading}
+                    />
+                    <span className="checkbox-text">
+                      <svg className="email-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z" fill="currentColor"/>
+                      </svg>
+                      Send login credentials via email
+                    </span>
+                  </label>
+                  <p className="checkbox-hint">The employee will receive their email and password to log into the desktop app</p>
+                </div>
+              )}
             </>
           )}
 

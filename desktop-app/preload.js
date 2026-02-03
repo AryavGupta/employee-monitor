@@ -9,7 +9,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 const validSendChannels = [
   'login',
   'logout',
-  'get-tracking-status'
+  'get-tracking-status',
+  'change-password',
+  'open-settings',
+  'navigate-to'
 ];
 
 const validReceiveChannels = [
@@ -17,7 +20,8 @@ const validReceiveChannels = [
   'tracking-status',
   'screenshot-captured',
   'activity-update',
-  'system-wake'
+  'system-wake',
+  'change-password-response'
 ];
 
 // Expose protected APIs to the renderer process

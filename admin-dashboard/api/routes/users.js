@@ -163,19 +163,47 @@ router.delete('/:id', authenticateToken, authorizeAdmin, async (req, res) => {
     const pool = req.app.locals.pool;
     const { id } = req.params;
 
-    if (id === req.user.userId) {
+    // Compare as strings to handle UUID comparison
+    if (String(id) === String(req.user.userId)) {
       return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
     }
 
-    const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING email', [id]);
-
-    if (result.rows.length === 0) {
+    // Check if user exists and get their role
+    const userCheck = await pool.query('SELECT id, email, role FROM users WHERE id = $1', [id]);
+    if (userCheck.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    res.json({ success: true, message: 'User deleted successfully' });
+    const userToDelete = userCheck.rows[0];
+
+    // Prevent deleting other admins (optional safety measure)
+    if (userToDelete.role === 'admin') {
+      return res.status(403).json({ success: false, message: 'Cannot delete admin users. Demote them first.' });
+    }
+
+    // Delete the user (CASCADE will handle related records)
+    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+
+    // Log the deletion (non-blocking - don't fail delete if audit fails)
+    try {
+      await pool.query(
+        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id) VALUES ($1, $2, $3, $4)`,
+        [req.user.userId, 'DELETE_USER', 'user', id]
+      );
+    } catch (auditErr) {
+      console.error('Audit log failed:', auditErr.message);
+    }
+
+    res.json({ success: true, message: `User ${userToDelete.email} deleted successfully` });
   } catch (error) {
     console.error('Delete user error:', error);
+    // Handle foreign key constraint errors
+    if (error.code === '23503') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete user: they have related records that must be deleted first'
+      });
+    }
     res.status(500).json({ success: false, message: 'Failed to delete user' });
   }
 });
