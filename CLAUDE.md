@@ -6,14 +6,21 @@ Employee monitoring system with real-time tracking, screenshots, and analytics.
 
 ## MANDATORY PROJECT WORKFLOW
 
-> **Project Rule:** Any AI or developer working on this project MUST read this file (`CLAUDE.md`) before starting any work, and MUST update both `CLAUDE.md` and `PENDING_FEATURES.md` after making any significant change. These files are mandatory and must always reflect the current state of the project.
+> **Project Rule:** Any AI or developer working on this project MUST read this file (`CLAUDE.md`) before starting any work, and MUST update both `CLAUDE.md` and `TODO.md` after making any significant change. These files are mandatory and must always reflect the current state of the project.
 
 ### Workflow Steps:
 1. **Read `CLAUDE.md` first** - Understand project context, architecture, and constraints
-2. **Check `PENDING_FEATURES.md`** - See what's incomplete, buggy, or planned
+2. **Check `TODO.md`** - See what's incomplete, buggy, or planned
 3. **Make changes** - Implement, fix, or refactor
 4. **Update both files** - Document what changed, what's complete, what's pending
 5. **Never skip this** - This ensures continuity and prevents context loss
+
+### Documentation Files
+
+| File | Purpose |
+|------|---------|
+| `CLAUDE.md` | Project rules, architecture, conventions, and known issues |
+| `TODO.md` | Planned features, bugs, and work continuity notes |
 
 ---
 
@@ -168,6 +175,102 @@ COMPANY_NAME=Your Company
 
 ---
 
+## Key Files Reference
+
+### Backend API (`admin-dashboard/api/routes/`)
+
+| File | Purpose |
+|------|---------|
+| `auth.js` | Login, token validation, admin reset |
+| `users.js` | User CRUD, profile updates, password changes |
+| `activity.js` | Activity log upload (single + batch) |
+| `sessions.js` | Work session clock in/out |
+| `screenshots.js` | Screenshot upload + retrieval |
+| `teams.js` | Team management, settings, members |
+| `presence.js` | Heartbeat and online status |
+| `reports.js` | Analytics queries, PDF/CSV exports |
+| `alerts.js` | Alert rules and notifications |
+
+### Frontend (`admin-dashboard/src/components/`)
+
+| File | Purpose |
+|------|---------|
+| `Dashboard.js` | Main dashboard with overview stats |
+| `Users.js` | User management table |
+| `UserActivity.js` | Individual user activity details |
+| `Analytics.js` | Charts and productivity metrics |
+| `Teams.js` | Team configuration UI |
+| `Screenshots.js` | Screenshot gallery view |
+| `Reports.js` | Report generation and export |
+
+### Desktop App (`desktop-app/`)
+
+| File | Purpose |
+|------|---------|
+| `main.js` | Main process: tracking loops, screenshots, IPC handlers, power monitor |
+| `preload.js` | Secure IPC bridge (contextIsolation) |
+| `login.html` | Login UI |
+| `tracking.html` | Tracking status display, clock in/out |
+| `settings.html` | Password change, app settings |
+
+---
+
+## Auth Architecture
+
+### JWT-Based Authentication
+
+1. **Login Flow**:
+   - User submits email/password to `/api/auth/login`
+   - Server validates credentials against `users` table (bcrypt hash)
+   - On success, returns JWT containing `{ userId, email, role, teamId }`
+   - Token signed with `JWT_SECRET` (required env var, no fallback)
+
+2. **Token Storage**:
+   - **Dashboard**: Stored in `localStorage` as `token`
+   - **Desktop App**: Stored in Electron's `electron-store` (encrypted on disk)
+
+3. **Route Protection**:
+   - All protected routes use `authenticateToken` middleware (`api/middleware/auth.js`)
+   - Middleware extracts token from `Authorization: Bearer <token>` header
+   - Validates signature and expiration, attaches `req.user` with decoded payload
+   - Returns 401 for missing/invalid token, 403 for insufficient role
+
+4. **Role-Based Access**:
+   - `admin`: Full access to all endpoints
+   - `manager`: Access to own team's data only
+   - `employee`: Access to own data only
+   - Authorization checks in route handlers verify `req.user.role` and `req.user.teamId`
+
+5. **Token Expiration**:
+   - Default: 24 hours
+   - Desktop app auto-refreshes on startup if token is near expiration
+
+---
+
+## Code Style & Conventions
+
+### Data Handling
+- **UTC internally**: All timestamps stored/processed in UTC; convert at UI edges only
+- **Avoid `SELECT *`**: Always specify required columns; use pagination for list endpoints
+- **Nullish coalescing**: Use `??` not `||` when `0` or `false` are valid values
+
+### API Design
+- **Add fields as optional first**: New fields should be optional initially, enforce later with migration
+- **Handle errors explicitly**: Return clear status codes (400/401/403/404/500) with generic messages
+- **Never log secrets**: No tokens, passwords, or API keys in logs
+
+### Change Verification Checklist
+Before finalizing any change, verify:
+- [ ] Auth still works (login, token validation)
+- [ ] Screenshot upload + fetch works
+- [ ] Activity batch upload works
+- [ ] Sessions clock in/out works
+- [ ] Presence heartbeat updates online status
+- [ ] Dashboard analytics render correctly
+- [ ] No console errors in browser/Electron
+
+---
+
 ## Claude Instructions (Project Rules)
 
 ### Response Style
@@ -236,7 +339,7 @@ COMPANY_NAME=Your Company
 
 ### Pending Features Tracking
 
-* Keep `PENDING_FEATURES.md` up to date:
+* Keep `TODO.md` up to date:
   * When implementing a feature from the file, remove it once complete
   * When adding new planned features, document them in the file
   * Include: database migrations, file changes, env vars, verification checklist
@@ -245,6 +348,14 @@ COMPANY_NAME=Your Company
 ---
 
 ## Known AI Mistakes / Fixes
+
+### IN PRODUCTION
+
+*No active issues at this time.*
+
+---
+
+### RESOLVED HISTORICAL
 
 *(Newest on top)*
 
