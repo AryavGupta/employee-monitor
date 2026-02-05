@@ -4,6 +4,8 @@
 
 ---
 
+---
+
 ## Currently Pending
 
 ### Performance Improvements
@@ -45,6 +47,71 @@
 ---
 
 ## Recently Completed
+
+### Desktop App Stealth Mode (February 2026) - COMPLETED
+**What changed:**
+- Implemented persistent login - app remembers credentials and auto-logs in on startup
+- Disabled logout and settings access for employees
+- Added admin-only quit protection - requires admin credentials to exit
+- Simplified tracking UI - removed screenshot count, activity log, settings/logout buttons
+- Force-enabled auto-start on boot using direct registry manipulation (not auto-launch npm package)
+- Auto-start re-enables itself every 30 seconds if user disables in Task Manager
+- Added encrypted credential storage using electron-store
+- **Admin-only uninstall** - App installs to Program Files, requires admin to uninstall
+
+**Security Design:**
+- Task Manager termination cannot be prevented (Windows security feature)
+- If user kills app via Task Manager, it auto-restarts on next boot
+- Only users with `role: 'admin'` can quit the application
+- Credentials validated against server before allowing quit
+- Uninstall requires admin rights (installed to C:\Program Files)
+
+**Auto-Start Enforcement (Key Fix):**
+- Removed `auto-launch` npm package (didn't work reliably)
+- Uses direct `reg.exe` commands to set `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+- Also clears `HKCU\...\Explorer\StartupApproved\Run` which is what Task Manager uses to disable apps
+- Runs on app startup, after login, and every 30 seconds
+
+**Files Created:**
+- `desktop-app/admin-password.html` - Admin authentication dialog for quit
+
+**Files Modified:**
+- `package.json`:
+  - Added electron-store dependency
+  - Removed auto-launch dependency
+  - NSIS config: `perMachine: true` for Program Files installation
+- `desktop-app/main.js`:
+  - Added electron-store for encrypted credential storage
+  - Added `checkStoredCredentials()` for auto-login on startup
+  - Replaced auto-launch package with `enforceAutoLaunch()` using reg.exe
+  - Modified login handler to store credentials and enforce auto-launch
+  - Disabled logout and open-settings handlers
+  - Added `showAdminQuitDialog()` function
+  - Added admin-quit-auth and admin-quit-cancel IPC handlers
+  - Modified tray menu to require admin for quit
+- `desktop-app/preload.js`:
+  - Removed 'logout', 'open-settings', 'change-password' from validSendChannels
+  - Added 'admin-quit-auth', 'admin-quit-cancel' to validSendChannels
+  - Added 'admin-quit-response' to validReceiveChannels
+- `desktop-app/tracking.html`:
+  - Removed screenshot count, next capture countdown
+  - Removed activity log section
+  - Removed settings and logout buttons
+  - Simplified JavaScript
+
+**Verification Checklist:** ✅ ALL PASSED
+1. ✅ Fresh install asks for login credentials
+2. ✅ Close and reopen app - auto-login without showing login screen
+3. ✅ Tracking page shows only session start and active/idle time
+4. ✅ Auto-start shows as Enabled in Task Manager after install
+5. ✅ Disable in Task Manager → re-enables within 30 seconds
+6. ✅ Restart Windows - app auto-launches
+7. ✅ Click "Quit (Admin Only)" in tray - shows admin password dialog
+8. ✅ Enter non-admin credentials - fails with error
+9. ✅ Enter admin credentials - app quits
+10. ✅ Uninstall requires admin rights (UAC prompt)
+
+---
 
 ### Admin Email Credentials + Employee Password Change (February 2026)
 **What changed:**

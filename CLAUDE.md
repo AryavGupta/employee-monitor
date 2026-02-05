@@ -97,16 +97,19 @@ Key tables:
 
 ## Desktop App Flow
 
-1. User logs in → JWT token stored
-2. Fetches team settings (intervals, thresholds)
-3. Starts tracking loop:
+1. App starts → checks for stored credentials
+2. If valid token exists → auto-login, skip to step 5
+3. If no token → User logs in → JWT token stored (encrypted)
+4. Fetches team settings (intervals, thresholds)
+5. Starts tracking loop:
    - Screenshots at `screenshot_interval` (default 60s)
    - Activity tracking at `activity_interval` (default 10s)
    - Heartbeat every 30s for presence
-4. Tracks: active app, window title, URL (browsers), idle time
-5. Batches activity logs (6 entries) before sending
-6. Runs in system tray when minimized
-7. Settings page allows password change without logging out
+6. Tracks: active app, window title, URL (browsers), idle time
+7. Batches activity logs (6 entries) before sending
+8. Runs in system tray when minimized
+9. Auto-starts on boot (always enabled)
+10. Quit requires admin credentials (stealth mode)
 
 ## Deployment
 
@@ -207,11 +210,12 @@ COMPANY_NAME=Your Company
 
 | File | Purpose |
 |------|---------|
-| `main.js` | Main process: tracking loops, screenshots, IPC handlers, power monitor |
+| `main.js` | Main process: tracking loops, screenshots, IPC handlers, power monitor, stealth mode |
 | `preload.js` | Secure IPC bridge (contextIsolation) |
 | `login.html` | Login UI |
-| `tracking.html` | Tracking status display, clock in/out |
-| `settings.html` | Password change, app settings |
+| `tracking.html` | Tracking status display (simplified for stealth mode) |
+| `settings.html` | Password change, app settings (disabled in stealth mode) |
+| `admin-password.html` | Admin authentication dialog for quit (stealth mode) |
 
 ---
 
@@ -358,6 +362,11 @@ Before finalizing any change, verify:
 ### RESOLVED HISTORICAL
 
 *(Newest on top)*
+
+* **Auto-launch npm package doesn't prevent Task Manager disable** (February 2026): The `auto-launch` package only checks if the registry Run key exists, but when users disable an app in Task Manager → Startup Apps, Windows doesn't remove the Run key - it adds a "disabled" flag in `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`. The package doesn't check or clear this flag.
+  * **Fix**: Replaced `auto-launch` with direct `reg.exe` commands that both set the Run key AND delete the StartupApproved entry.
+  * **Affected files**: `desktop-app/main.js`, `package.json` (removed auto-launch dependency)
+  * **Prevention**: When implementing Windows auto-start features, always handle both the Run key and the StartupApproved key. Test by disabling in Task Manager, not just checking if the registry entry exists.
 
 * **Multiple critical security vulnerabilities identified and fixed** (January 2026): Security audit revealed several vulnerabilities that were fixed:
   1. **JWT secret had insecure fallback** - `process.env.JWT_SECRET || 'default'` allowed auth bypass if env var not set. Fixed: app now exits if JWT_SECRET missing.

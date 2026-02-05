@@ -8,11 +8,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Whitelist of allowed IPC channels for security
 const validSendChannels = [
   'login',
-  'logout',
   'get-tracking-status',
-  'change-password',
-  'open-settings',
-  'navigate-to'
+  'navigate-to',
+  'admin-quit-auth',
+  'admin-quit-cancel'
 ];
 
 const validReceiveChannels = [
@@ -21,7 +20,7 @@ const validReceiveChannels = [
   'screenshot-captured',
   'activity-update',
   'system-wake',
-  'change-password-response'
+  'admin-quit-response'
 ];
 
 // Expose protected APIs to the renderer process

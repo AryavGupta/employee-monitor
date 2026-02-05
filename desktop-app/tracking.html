@@ -174,35 +174,6 @@
       color: #7f1d1d;
     }
 
-    .activity-log {
-      background: #f8f9fa;
-      padding: 12px;
-      border-radius: 8px;
-      margin-bottom: 15px;
-      max-height: 100px;
-      overflow-y: auto;
-    }
-
-    .log-entry {
-      font-size: 11px;
-      color: #666;
-      padding: 4px 0;
-      border-bottom: 1px solid #e1e8ed;
-    }
-
-    .log-entry:last-child {
-      border-bottom: none;
-    }
-
-    .log-entry.blocked {
-      color: #dc2626;
-    }
-
-    .log-time {
-      color: #999;
-      margin-right: 6px;
-    }
-
     .time-stats {
       display: flex;
       gap: 10px;
@@ -237,53 +208,6 @@
       text-transform: uppercase;
     }
 
-    .button-group {
-      display: flex;
-      gap: 10px;
-    }
-
-    button {
-      flex: 1;
-      padding: 12px;
-      background: #e74c3c;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.3s;
-    }
-
-    button:hover {
-      background: #c0392b;
-    }
-
-    .btn-settings {
-      flex: 0 0 auto;
-      width: 44px;
-      padding: 12px;
-      background: #f8f9fa;
-      color: #333;
-      border: 1px solid #ddd;
-    }
-
-    .btn-settings:hover {
-      background: #e9ecef;
-    }
-
-    .btn-settings svg {
-      width: 18px;
-      height: 18px;
-      fill: currentColor;
-    }
-
-    .note {
-      margin-top: 15px;
-      font-size: 11px;
-      color: #999;
-      line-height: 1.5;
-    }
   </style>
 </head>
 <body>
@@ -325,68 +249,28 @@
         <span class="info-label">Session Start:</span>
         <span class="info-value" id="sessionStart">--:--</span>
       </div>
-      <div class="info-row">
-        <span class="info-label">Screenshots:</span>
-        <span class="info-value" id="screenshotCount">0</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Next Capture:</span>
-        <span class="info-value" id="nextCapture">60s</span>
-      </div>
     </div>
-
-    <div class="activity-log" id="activityLog">
-      <div class="log-entry">
-        <span class="log-time">--:--:--</span>
-        <span>Monitoring started</span>
-      </div>
-    </div>
-
-    <div class="button-group">
-      <button id="settingsBtn" class="btn-settings" title="Settings">
-        <svg viewBox="0 0 24 24">
-          <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
-        </svg>
-      </button>
-      <button id="logoutBtn">Stop Tracking & Logout</button>
-    </div>
-
-    <p class="note">
-      Screenshots are captured every minute. Activity and URL tracking is active. Blocked sites will trigger notifications.
-    </p>
   </div>
 
   <script>
     // Use secure electronAPI exposed via preload script (no direct Node.js access)
     const { send, on } = window.electronAPI;
 
-    let screenshotCount = 0;
     let sessionStart = new Date();
-    let countdown = 60;
-    let countdownInterval;
     let lastBlockedDomain = null;
 
     // Initialize
     document.getElementById('sessionStart').textContent = sessionStart.toLocaleTimeString();
-    addLogEntry('Monitoring started');
 
     // Request tracking status
     send('get-tracking-status');
 
     on('tracking-status', (data) => {
-      if (data.teamSettings) {
-        // Update countdown based on team settings
-        if (data.teamSettings.screenshot_interval) {
-          countdown = data.teamSettings.screenshot_interval;
-        }
-      }
+      // Status received
     });
 
     on('screenshot-captured', (data) => {
-      screenshotCount++;
-      document.getElementById('screenshotCount').textContent = screenshotCount;
-      addLogEntry(`Screenshot captured`);
-      resetCountdown();
+      // Screenshot captured silently
     });
 
     on('activity-update', (data) => {
@@ -430,57 +314,12 @@
         document.getElementById('blockedMessage').textContent =
           `Access to ${data.domain} is restricted by company policy.`;
         lastBlockedDomain = data.domain;
-        addLogEntry(`BLOCKED: ${data.domain}`, true);
 
         // Hide warning after 10 seconds
         setTimeout(() => {
           blockedWarning.classList.remove('show');
         }, 10000);
       }
-    });
-
-    function addLogEntry(message, isBlocked = false) {
-      const log = document.getElementById('activityLog');
-      const entry = document.createElement('div');
-      entry.className = `log-entry${isBlocked ? ' blocked' : ''}`;
-      entry.innerHTML = `
-        <span class="log-time">${new Date().toLocaleTimeString()}</span>
-        <span>${message}</span>
-      `;
-      log.insertBefore(entry, log.firstChild);
-
-      // Keep only last 5 entries
-      while (log.children.length > 5) {
-        log.removeChild(log.lastChild);
-      }
-    }
-
-    function resetCountdown() {
-      countdown = 60;
-      if (countdownInterval) clearInterval(countdownInterval);
-      startCountdown();
-    }
-
-    function startCountdown() {
-      countdownInterval = setInterval(() => {
-        countdown--;
-        document.getElementById('nextCapture').textContent = `${countdown}s`;
-        if (countdown <= 0) {
-          countdown = 60;
-        }
-      }, 1000);
-    }
-
-    startCountdown();
-
-    document.getElementById('logoutBtn').addEventListener('click', () => {
-      if (confirm('Are you sure you want to stop tracking and logout?')) {
-        send('logout');
-      }
-    });
-
-    document.getElementById('settingsBtn').addEventListener('click', () => {
-      send('open-settings');
     });
   </script>
 </body>
