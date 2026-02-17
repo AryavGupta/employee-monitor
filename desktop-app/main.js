@@ -455,12 +455,8 @@ app.on('window-all-closed', () => {
   }
 });
 
-// Cleanup on quit
 app.on('before-quit', () => {
-  if (autoLaunchCheckInterval) {
-    clearInterval(autoLaunchCheckInterval);
-    autoLaunchCheckInterval = null;
-  }
+  // Cleanup handled by Electron
 });
 
 app.on('activate', () => {
@@ -469,69 +465,16 @@ app.on('activate', () => {
   }
 });
 
-// Setup auto-launch on system boot - always enabled in stealth mode
-// Auto-launch enforcement - checks and re-enables if user disabled it
-let autoLaunchCheckInterval = null;
-
-async function setupAutoLaunch() {
-  // Only run on Windows for now (registry-based approach)
-  if (process.platform !== 'win32') {
-    console.log('Auto-launch enforcement only supported on Windows');
-    return;
-  }
-
-  // Force enable auto-launch on startup
-  await enforceAutoLaunch();
-
-  // Periodically check and re-enable if user disabled it (every 30 seconds)
-  autoLaunchCheckInterval = setInterval(enforceAutoLaunch, 30 * 1000);
-}
-
-async function enforceAutoLaunch() {
-  if (process.platform !== 'win32') return;
-
-  const exePath = app.getPath('exe');
-  const appName = 'EmployeeMonitor';
-
-  console.log('Enforcing auto-launch for:', exePath);
-
+// Setup auto-launch on system boot using Electron's native API
+function setupAutoLaunch() {
   try {
-    // Use reg.exe directly - more reliable than PowerShell for registry operations
-    // Add the Run key (standard auto-start)
-    // Note: Path needs escaped quotes because it may contain spaces
-    await new Promise((resolve) => {
-      const regCommand = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${appName}" /t REG_SZ /d "\\"${exePath}\\"" /f`;
-      console.log('Running:', regCommand);
-      exec(regCommand,
-        { timeout: 10000 },
-        (error, stdout, stderr) => {
-          if (error) {
-            console.log('Failed to add Run key:', error.message, stderr);
-          } else {
-            console.log('Run key added successfully');
-          }
-          resolve();
-        }
-      );
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      name: 'EmployeeMonitor'
     });
-
-    // Remove the StartupApproved entry (clears Task Manager's "disabled" flag)
-    await new Promise((resolve) => {
-      exec(`reg delete "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run" /v "${appName}" /f`,
-        { timeout: 10000 },
-        (error, stdout, stderr) => {
-          // Error is expected if key doesn't exist - that's fine
-          if (!error) {
-            console.log('StartupApproved entry removed (was disabled, now enabled)');
-          }
-          resolve();
-        }
-      );
-    });
-
-    console.log('Auto-launch enforcement complete');
+    console.log('Auto-launch enabled via setLoginItemSettings');
   } catch (error) {
-    console.log('Error enforcing auto-launch:', error.message);
+    console.log('Error setting auto-launch:', error.message);
   }
 }
 
@@ -553,9 +496,6 @@ ipcMain.on('login', async (event, credentials) => {
       });
 
       event.reply('login-response', { success: true, user: response.data.user });
-
-      // Enforce auto-launch after successful login
-      enforceAutoLaunch();
 
       // Fetch team settings
       await fetchTeamSettings();
