@@ -79,6 +79,7 @@ let screenshotInterval;
 let activityInterval;
 let heartbeatInterval;
 let isTracking = false;
+let isQuitting = false;
 let currentSessionId = null;
 let lastActivityTime = Date.now();
 let activityBuffer = [];
@@ -137,7 +138,7 @@ function createWindow() {
   // Always minimize to tray instead of closing - protects against close during startup
   // and while tracking. The only way to quit is via admin credentials (tray menu).
   mainWindow.on('close', (event) => {
-    if (tray) {
+    if (tray && !isQuitting) {
       event.preventDefault();
       mainWindow.hide();
     }
@@ -640,6 +641,13 @@ ipcMain.on('admin-quit-auth', async (event, { email, password }) => {
 
         // Stop tracking and quit
         await stopScreenshotCapture();
+        isQuitting = true;
+
+        // Destroy tray so it doesn't linger
+        if (tray) {
+          tray.destroy();
+          tray = null;
+        }
 
         // Close the dialog first
         if (adminQuitWindow) {
