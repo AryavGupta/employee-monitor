@@ -48,6 +48,12 @@
 
 ## Recently Completed
 
+### Desktop App Fixes (February 2026) - COMPLETED
+- Removed "Running in background" notification on window close (stealth improvement)
+- Fixed admin quit not actually quitting — close handler blocked `app.quit()` because tray existed
+  - Added `isQuitting` flag to bypass close prevention, destroy tray before quit
+- Removed unused `showNotification` function and `Notification` import
+
 ### Desktop App Stealth Mode (February 2026) - COMPLETED
 **What changed:**
 - Implemented persistent login - app remembers credentials and auto-logs in on startup
@@ -66,11 +72,18 @@
 - Credentials validated against server before allowing quit
 - Uninstall requires admin rights (installed to C:\Program Files)
 
-**Auto-Start Enforcement (Key Fix):**
-- Removed `auto-launch` npm package (didn't work reliably)
-- Uses direct `reg.exe` commands to set `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-- Also clears `HKCU\...\Explorer\StartupApproved\Run` which is what Task Manager uses to disable apps
-- Runs on app startup, after login, and every 30 seconds
+**Auto-Start:**
+- Uses `app.setLoginItemSettings({ openAtLogin: true })` (Electron native API)
+- On auto-login success, app runs silently in background (no window shown)
+- Window only appears when user explicitly opens via tray icon
+- By then, tracking is active and close protection is fully armed
+- Closing window silently minimizes to tray (no notification)
+- Admin quit sets `isQuitting` flag and destroys tray before `app.quit()`
+
+**Startup Race Condition Fix (February 2026):**
+- Close handler now always protects if tray exists (no longer gated on `isTracking`)
+- On auto-login: `mainWindow.loadFile(tracking.html)` without showing window
+- Prevents user from closing app via X during the startup auth check window
 
 **Files Created:**
 - `desktop-app/admin-password.html` - Admin authentication dialog for quit

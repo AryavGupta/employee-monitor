@@ -363,6 +363,16 @@ Before finalizing any change, verify:
 
 *(Newest on top)*
 
+* **Admin quit didn't actually quit — tray icon lingered** (February 2026): After admin authenticated to quit, `app.quit()` fired `close` on `mainWindow`, but the close handler always called `preventDefault()` when `tray` existed, preventing the app from exiting. The tray icon persisted as an orphan with stale tracking UI.
+  * **Fix**: Added `isQuitting` flag set before `app.quit()`. Close handler skips `preventDefault()` when `isQuitting` is true. Tray is explicitly destroyed before quitting.
+  * **Affected files**: `desktop-app/main.js` — close handler, admin-quit-auth handler
+  * **Prevention**: Any code that calls `app.quit()` must account for close handlers that block window closing. Use a flag to signal intentional quit so close interceptors can stand down.
+
+* **Close protection race condition on startup** (February 2026): During auto-login on boot, the app validates the stored token over the network (up to 8s). If the user clicked the tray icon during that window, the window appeared blank with `isTracking = false`, so clicking X closed the app without the admin credential prompt.
+  * **Fix**: Changed close handler from `if (isTracking && tray)` to `if (tray)` — always redirect to hide as long as the tray exists (from the very first line of startup). On auto-login success, load `tracking.html` in background without showing the window (`mainWindow.loadFile` instead of `showWindowWithPage`). User only sees the app when they deliberately open it via tray, by which time tracking is active.
+  * **Affected files**: `desktop-app/main.js` — close handler, `checkStoredCredentials`
+  * **Prevention**: Close protection should never depend on `isTracking`. The tray existing is sufficient — if the tray is up, the app should never quit via the X button.
+
 * **Auto-launch npm package doesn't prevent Task Manager disable** (February 2026): The `auto-launch` package only checks if the registry Run key exists, but when users disable an app in Task Manager → Startup Apps, Windows doesn't remove the Run key - it adds a "disabled" flag in `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`. The package doesn't check or clear this flag.
   * **Fix**: Replaced `auto-launch` with direct `reg.exe` commands that both set the Run key AND delete the StartupApproved entry.
   * **Affected files**: `desktop-app/main.js`, `package.json` (removed auto-launch dependency)
