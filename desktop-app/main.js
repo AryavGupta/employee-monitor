@@ -1,4 +1,4 @@
-const { app, BrowserWindow, screen, desktopCapturer, ipcMain, powerMonitor, Tray, Menu, Notification, dialog, nativeImage } = require('electron');
+const { app, BrowserWindow, screen, desktopCapturer, ipcMain, powerMonitor, Tray, Menu, dialog, nativeImage } = require('electron');
 const path = require('path');
 const axios = require('axios');
 const fs = require('fs');
@@ -131,19 +131,15 @@ function createWindow() {
     ...(iconPath && { icon: iconPath })
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'login.html'));
+  // Don't load login.html yet — checkStoredCredentials() decides what to show
+  // Window stays hidden (show: false) until auth state is resolved
 
-  // Show window when ready to prevent black screen
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-  });
-
-  // Minimize to tray instead of closing
+  // Always minimize to tray instead of closing - protects against close during startup
+  // and while tracking. The only way to quit is via admin credentials (tray menu).
   mainWindow.on('close', (event) => {
-    if (isTracking && tray) {
+    if (tray) {
       event.preventDefault();
       mainWindow.hide();
-      showNotification('Employee Monitor', 'Running in background. Click tray icon to show.');
     }
   });
 
@@ -210,7 +206,7 @@ function createTray() {
     }
   ]);
 
-  tray.setToolTip('Employee Monitor - Tracking Active');
+  tray.setToolTip(isTracking ? 'Employee Monitor - Tracking Active' : 'Employee Monitor - Starting...');
   tray.setContextMenu(contextMenu);
 
   tray.on('click', () => {
@@ -252,13 +248,6 @@ function updateTrayMenu() {
   tray.setToolTip(isTracking ? 'Employee Monitor - Tracking Active' : 'Employee Monitor');
 }
 
-// Show notification
-function showNotification(title, body) {
-  if (Notification.isSupported()) {
-    new Notification({ title, body }).show();
-  }
-}
-
 // Initialize app
 app.on('ready', async () => {
   console.log('Starting Employee Monitor...');
@@ -266,32 +255,46 @@ app.on('ready', async () => {
 
   createWindow();
 
+  // Create tray immediately so user sees the app launched
+  createTray();
+
   // Setup auto-launch - always enabled for stealth mode
   setupAutoLaunch();
 
   // Setup sleep/wake handlers to prevent uptime inflation
   setupPowerMonitorHandlers();
 
-  // Check for stored credentials and auto-login
+  // Resolve auth state, then show the correct page
   await checkStoredCredentials();
 });
 
+// Show the window after loading a page (waits for page to render)
+function showWindowWithPage(pagePath) {
+  if (!mainWindow) return;
+  mainWindow.loadFile(pagePath);
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
+}
+
 // Check stored credentials and auto-login if valid
+// Window stays hidden until this function decides what to show
 async function checkStoredCredentials() {
   const credentials = store.get('credentials');
 
   if (!credentials || !credentials.token) {
     console.log('No stored credentials found, showing login');
+    showWindowWithPage(path.join(__dirname, 'login.html'));
     return;
   }
 
   console.log('Found stored credentials, validating token...');
 
   try {
-    // Validate token with server
+    // Validate token with server (8s timeout — fallback to login if network is slow)
     const response = await axios.get(`${CONFIG.API_URL}/api/auth/verify`, {
       headers: { Authorization: `Bearer ${credentials.token}` },
-      timeout: 10000
+      timeout: 8000
     });
 
     if (response.data.success) {
@@ -305,24 +308,23 @@ async function checkStoredCredentials() {
       // Fetch team settings
       await fetchTeamSettings();
 
-      // Create tray icon
-      createTray();
-
       // Start monitoring
       startScreenshotCapture();
 
-      // Navigate to tracking page
-      if (mainWindow) {
-        mainWindow.loadFile(path.join(__dirname, 'tracking.html'));
-      }
+      // Load tracking page in background - window stays hidden (stealth startup).
+      // By the time the user opens the app via tray, isTracking is true and
+      // the close handler will redirect X to tray instead of quitting.
+      mainWindow.loadFile(path.join(__dirname, 'tracking.html'));
     } else {
       console.log('Token invalid, clearing credentials');
       store.delete('credentials');
+      showWindowWithPage(path.join(__dirname, 'login.html'));
     }
   } catch (error) {
     console.log('Token validation failed:', error.message);
-    // Clear invalid credentials
+    // Clear invalid credentials and fall back to login
     store.delete('credentials');
+    showWindowWithPage(path.join(__dirname, 'login.html'));
   }
 }
 
@@ -500,10 +502,8 @@ ipcMain.on('login', async (event, credentials) => {
       // Fetch team settings
       await fetchTeamSettings();
 
-      // Create tray icon
+      // Ensure tray exists (no-op if already created), then start monitoring
       createTray();
-
-      // Start monitoring
       startScreenshotCapture();
     } else {
       event.reply('login-response', { success: false, message: response.data.message });
