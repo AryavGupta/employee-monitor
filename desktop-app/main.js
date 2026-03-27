@@ -265,6 +265,15 @@ app.on('ready', async () => {
   // Setup sleep/wake handlers to prevent uptime inflation
   setupPowerMonitorHandlers();
 
+  // Delay startup to allow network initialization (firewall/VPN login on office networks)
+  // Without this, the app launches before the user has authenticated with the firewall
+  const BOOT_DELAY_MS = 30000; // 30 seconds
+  const credentials = store.get('credentials');
+  if (credentials && credentials.token) {
+    console.log(`Waiting ${BOOT_DELAY_MS / 1000}s for network initialization (firewall/VPN)...`);
+    await new Promise(resolve => setTimeout(resolve, BOOT_DELAY_MS));
+  }
+
   // Resolve auth state, then show the correct page
   await checkStoredCredentials();
 });
@@ -280,6 +289,7 @@ function showWindowWithPage(pagePath) {
 
 // Check stored credentials and auto-login if valid
 // Window stays hidden until this function decides what to show
+// Uses progressive retry for networks that aren't ready at boot (firewall, VPN)
 async function checkStoredCredentials() {
   const credentials = store.get('credentials');
 
@@ -291,42 +301,83 @@ async function checkStoredCredentials() {
 
   console.log('Found stored credentials, validating token...');
 
-  try {
-    // Validate token with server (8s timeout — fallback to login if network is slow)
-    const response = await axios.get(`${CONFIG.API_URL}/api/auth/verify`, {
-      headers: { Authorization: `Bearer ${credentials.token}` },
-      timeout: 8000
-    });
+  // Progressive retry: fast on good networks, patient on slow boot / firewall
+  // Attempt 1: immediate (5s), Attempt 2: wait 10s (8s), Attempt 3: wait 20s (8s), Attempt 4: wait 30s (8s)
+  const retrySchedule = [
+    { delay: 0, timeout: 5000 },
+    { delay: 10000, timeout: 8000 },
+    { delay: 20000, timeout: 8000 },
+    { delay: 30000, timeout: 8000 }
+  ];
 
-    if (response.data.success) {
-      console.log('Token valid, auto-logging in...');
+  for (let i = 0; i < retrySchedule.length; i++) {
+    const { delay, timeout } = retrySchedule[i];
 
-      // Restore credentials to CONFIG
-      CONFIG.USER_TOKEN = credentials.token;
-      CONFIG.USER_ID = credentials.userId;
-      CONFIG.USER_DATA = credentials.userData;
-
-      // Fetch team settings
-      await fetchTeamSettings();
-
-      // Start monitoring
-      startScreenshotCapture();
-
-      // Load tracking page in background - window stays hidden (stealth startup).
-      // By the time the user opens the app via tray, isTracking is true and
-      // the close handler will redirect X to tray instead of quitting.
-      mainWindow.loadFile(path.join(__dirname, 'tracking.html'));
-    } else {
-      console.log('Token invalid, clearing credentials');
-      store.delete('credentials');
-      showWindowWithPage(path.join(__dirname, 'login.html'));
+    if (delay > 0) {
+      console.log(`Network not ready, retrying in ${delay / 1000}s... (attempt ${i + 1}/${retrySchedule.length})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
-  } catch (error) {
-    console.log('Token validation failed:', error.message);
-    // Clear invalid credentials and fall back to login
-    store.delete('credentials');
-    showWindowWithPage(path.join(__dirname, 'login.html'));
+
+    try {
+      const response = await axios.get(`${CONFIG.API_URL}/api/auth/verify`, {
+        headers: { Authorization: `Bearer ${credentials.token}` },
+        timeout
+      });
+
+      // Detect captive portal / firewall login pages returning HTML instead of JSON
+      // These return HTTP 200 but with HTML content, not our API's JSON
+      const isApiResponse = response.data && typeof response.data === 'object' && 'success' in response.data;
+
+      if (!isApiResponse) {
+        // Response is not from our API (likely a captive portal / firewall page)
+        console.log(`Attempt ${i + 1}: Got non-API response (captive portal?), treating as network error`);
+        continue; // Retry — user may need to complete firewall login first
+      }
+
+      if (response.data.success) {
+        console.log('Token valid, auto-logging in...');
+        CONFIG.USER_TOKEN = credentials.token;
+        CONFIG.USER_ID = credentials.userId;
+        CONFIG.USER_DATA = credentials.userData;
+
+        await fetchTeamSettings();
+        startScreenshotCapture();
+
+        // Load tracking page in background - window stays hidden (stealth startup).
+        mainWindow.loadFile(path.join(__dirname, 'tracking.html'));
+        return;
+      } else {
+        // Server explicitly rejected the token — clear and show login
+        console.log('Token invalid (server rejected), clearing credentials');
+        store.delete('credentials');
+        showWindowWithPage(path.join(__dirname, 'login.html'));
+        return;
+      }
+    } catch (error) {
+      const status = error.response?.status;
+
+      if (status === 401 || status === 403) {
+        // Token genuinely invalid/expired — clear and show login
+        console.log(`Token rejected with ${status}, clearing credentials`);
+        store.delete('credentials');
+        showWindowWithPage(path.join(__dirname, 'login.html'));
+        return;
+      }
+
+      // Network error (timeout, ECONNREFUSED, ENOTFOUND) — retry, never clear credentials
+      console.log(`Auth attempt ${i + 1}/${retrySchedule.length} failed: ${error.code || error.message}`);
+    }
   }
+
+  // All retries exhausted — start with stored credentials (offline-first)
+  // Tracking starts immediately; next heartbeat/API call will naturally validate
+  console.log('Network unavailable after retries. Starting with stored credentials (offline mode).');
+  CONFIG.USER_TOKEN = credentials.token;
+  CONFIG.USER_ID = credentials.userId;
+  CONFIG.USER_DATA = credentials.userData;
+
+  startScreenshotCapture();
+  mainWindow.loadFile(path.join(__dirname, 'tracking.html'));
 }
 
 // =====================================================
@@ -371,7 +422,7 @@ function setupPowerMonitorHandlers() {
   });
 
   // System resumed from sleep/suspend
-  powerMonitor.on('resume', () => {
+  powerMonitor.on('resume', async () => {
     const sleepDuration = suspendTime ? Math.round((Date.now() - suspendTime) / 1000) : 0;
     console.log(`System resumed - was asleep for ${sleepDuration} seconds`);
 
@@ -387,6 +438,31 @@ function setupPowerMonitorHandlers() {
     // Resume tracking if we were tracking before sleep
     if (isTracking && CONFIG.USER_TOKEN) {
       console.log('Resuming tracking after wake...');
+
+      // If sleep was long (>5 min), the server may have auto-closed the session.
+      // Check and start a new session if needed.
+      if (sleepDuration > 300) {
+        console.log('Long sleep detected, checking if session is still active...');
+        try {
+          const checkRes = await axios.get(
+            `${CONFIG.API_URL}/api/sessions/active`,
+            { headers: { Authorization: `Bearer ${CONFIG.USER_TOKEN}` }, timeout: 5000 }
+          );
+          if (!checkRes.data.data) {
+            // Session was closed server-side during sleep — start a new one
+            console.log('Session was closed during sleep, starting new session...');
+            totalActiveSeconds = 0;
+            totalIdleSeconds = 0;
+            await startWorkSession();
+          }
+        } catch (e) {
+          // Network not ready yet after wake — start new session to be safe
+          console.log('Could not check session status, starting new session:', e.message);
+          totalActiveSeconds = 0;
+          totalIdleSeconds = 0;
+          await startWorkSession();
+        }
+      }
 
       // Restart intervals
       screenshotInterval = setInterval(captureScreenshot, CONFIG.SCREENSHOT_INTERVAL);
@@ -446,6 +522,33 @@ function setupPowerMonitorHandlers() {
     }
   });
 
+  // System shutdown - end session before OS kills the app
+  powerMonitor.on('shutdown', () => {
+    console.log('System shutting down - ending session');
+
+    if (CONFIG.USER_TOKEN && currentSessionId) {
+      // Fire and forget with short timeout - OS gives very limited time
+      axios.post(
+        `${CONFIG.API_URL}/api/sessions/end`,
+        {
+          totalActiveTime: totalActiveSeconds,
+          totalIdleTime: totalIdleSeconds,
+          notes: `Session ended by system shutdown. Active: ${Math.round(totalActiveSeconds / 60)}min, Idle: ${Math.round(totalIdleSeconds / 60)}min`
+        },
+        {
+          headers: { 'Authorization': `Bearer ${CONFIG.USER_TOKEN}`, 'Content-Type': 'application/json' },
+          timeout: 3000
+        }
+      ).catch(() => {});
+
+      axios.post(
+        `${CONFIG.API_URL}/api/presence/heartbeat`,
+        { status: 'offline', reason: 'system_shutdown' },
+        { headers: { Authorization: `Bearer ${CONFIG.USER_TOKEN}` }, timeout: 3000 }
+      ).catch(() => {});
+    }
+  });
+
   console.log('Power monitor handlers registered');
 }
 
@@ -458,8 +561,15 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
-  // Cleanup handled by Electron
+app.on('before-quit', async () => {
+  if (CONFIG.USER_TOKEN && isTracking) {
+    try {
+      await sendActivityBatch();
+      await endWorkSession();
+    } catch (e) {
+      console.log('Cleanup on quit failed:', e.message);
+    }
+  }
 });
 
 app.on('activate', () => {
@@ -713,6 +823,14 @@ async function fetchTeamSettings() {
           if (teamSettings.idle_threshold) {
             CONFIG.IDLE_THRESHOLD = teamSettings.idle_threshold;
           }
+
+          // Store working hours for overtime detection
+          if (teamSettings.working_hours_start != null && teamSettings.working_hours_end != null) {
+            CONFIG.WORKING_HOURS_START = teamSettings.working_hours_start; // e.g., '22:30:00' or '22:30'
+            CONFIG.WORKING_HOURS_END = teamSettings.working_hours_end;
+            CONFIG.WORKING_DAYS = teamSettings.working_days || [1, 2, 3, 4, 5];
+            console.log(`Working hours: ${CONFIG.WORKING_HOURS_START} - ${CONFIG.WORKING_HOURS_END}, days: ${CONFIG.WORKING_DAYS}`);
+          }
         }
       } catch (e) {
         console.log('Could not fetch team settings:', e.message);
@@ -721,6 +839,62 @@ async function fetchTeamSettings() {
   } catch (error) {
     console.error('Error fetching team settings:', error.message);
   }
+}
+
+// Check if current time is within configured working hours
+// Returns { isOvertime: boolean, shiftDate: string (YYYY-MM-DD) }
+function getWorkingHoursStatus() {
+  if (!CONFIG.WORKING_HOURS_START || !CONFIG.WORKING_HOURS_END) {
+    // No working hours configured — never overtime
+    const today = new Date();
+    return { isOvertime: false, shiftDate: today.toISOString().split('T')[0] };
+  }
+
+  const now = new Date();
+  const currentDay = now.getDay() === 0 ? 7 : now.getDay(); // ISO: 1=Mon, 7=Sun
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  // Parse time strings (handle both 'HH:MM' and 'HH:MM:SS')
+  const [startH, startM] = CONFIG.WORKING_HOURS_START.split(':').map(Number);
+  const [endH, endM] = CONFIG.WORKING_HOURS_END.split(':').map(Number);
+  const startMinutes = startH * 60 + startM;
+  const endMinutes = endH * 60 + endM;
+
+  const todayStr = now.toISOString().split('T')[0];
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+  let isWithinHours = false;
+  let shiftDate = todayStr;
+
+  if (startMinutes <= endMinutes) {
+    // Normal shift (e.g., 09:00 - 17:00)
+    isWithinHours = currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    shiftDate = todayStr;
+
+    if (!CONFIG.WORKING_DAYS.includes(currentDay)) {
+      isWithinHours = false;
+    }
+  } else {
+    // Night shift (e.g., 22:30 - 07:30) — crosses midnight
+    if (currentMinutes >= startMinutes) {
+      // After start time, same day (e.g., 23:00 when shift starts 22:30)
+      isWithinHours = CONFIG.WORKING_DAYS.includes(currentDay);
+      shiftDate = todayStr; // Shift started today
+    } else if (currentMinutes < endMinutes) {
+      // Before end time, next day (e.g., 03:00 when shift ends 07:30)
+      const yesterdayDay = yesterday.getDay() === 0 ? 7 : yesterday.getDay();
+      isWithinHours = CONFIG.WORKING_DAYS.includes(yesterdayDay);
+      shiftDate = yesterdayStr; // Shift started yesterday
+    } else {
+      // Between end and start (e.g., 14:00 when shift is 22:30-07:30) — outside hours
+      isWithinHours = false;
+      shiftDate = todayStr;
+    }
+  }
+
+  return { isOvertime: !isWithinHours, shiftDate };
 }
 
 // Extract domain from URL
@@ -924,32 +1098,95 @@ async function uploadScreenshot(screenshotDataUrl) {
   }
 }
 
-async function startScreenshotCapture() {
+// Check if tracking should be active based on working hours
+// Returns true if within working hours OR no working hours configured
+function shouldTrackNow() {
+  if (!CONFIG.WORKING_HOURS_START || !CONFIG.WORKING_HOURS_END) {
+    return true; // No working hours configured — always track
+  }
+  const { isOvertime } = getWorkingHoursStatus();
+  return !isOvertime; // Track only during working hours (isOvertime=false means within hours)
+}
+
+// Working hours enforcement interval
+let workingHoursCheckInterval = null;
+
+// Check working hours and pause/resume tracking accordingly
+async function checkWorkingHoursAndToggle() {
+  const shouldTrack = shouldTrackNow();
+
+  if (shouldTrack && !isTracking) {
+    console.log('Within working hours — starting tracking');
+    await startTrackingNow();
+  } else if (!shouldTrack && isTracking) {
+    console.log('Outside working hours — pausing tracking');
+    await pauseTrackingNow();
+  }
+}
+
+// Internal: start tracking (called by working hours check)
+async function startTrackingNow() {
   if (isTracking) return;
 
   isTracking = true;
   console.log('Starting screenshot capture...');
-
-  // Update tray
   updateTrayMenu();
 
-  // Start a work session
   await startWorkSession();
-
-  // Start activity tracking
   startActivityTracking();
-
-  // Start heartbeat for presence
   startHeartbeat();
-
-  // Capture immediately on start
   captureScreenshot();
-
-  // Then capture at configured interval
   screenshotInterval = setInterval(captureScreenshot, CONFIG.SCREENSHOT_INTERVAL);
 }
 
+// Internal: pause tracking (called by working hours check)
+async function pauseTrackingNow() {
+  if (!isTracking) return;
+
+  console.log('Pausing tracking (outside working hours)...');
+
+  if (screenshotInterval) {
+    clearInterval(screenshotInterval);
+    screenshotInterval = null;
+  }
+  stopActivityTracking();
+  stopHeartbeat();
+  await endWorkSession();
+
+  isTracking = false;
+  updateTrayMenu();
+}
+
+async function startScreenshotCapture() {
+  // Start working hours enforcement check (every 60 seconds)
+  if (CONFIG.WORKING_HOURS_START && CONFIG.WORKING_HOURS_END) {
+    console.log(`Working hours enforcement active: ${CONFIG.WORKING_HOURS_START} - ${CONFIG.WORKING_HOURS_END}`);
+
+    // Check immediately and start/skip accordingly
+    const shouldTrack = shouldTrackNow();
+    if (shouldTrack) {
+      await startTrackingNow();
+    } else {
+      console.log('Outside working hours — tracking will start when work hours begin');
+      // Still send heartbeat so presence shows the user is online
+      startHeartbeat();
+    }
+
+    // Periodically check if we need to start/stop based on working hours
+    workingHoursCheckInterval = setInterval(checkWorkingHoursAndToggle, 60000);
+  } else {
+    // No working hours configured — track all the time
+    await startTrackingNow();
+  }
+}
+
 async function stopScreenshotCapture() {
+  // Stop working hours enforcement
+  if (workingHoursCheckInterval) {
+    clearInterval(workingHoursCheckInterval);
+    workingHoursCheckInterval = null;
+  }
+
   if (screenshotInterval) {
     clearInterval(screenshotInterval);
     screenshotInterval = null;
@@ -1189,6 +1426,9 @@ async function trackActivity() {
       }
     }
 
+    // Check working hours for overtime detection
+    const { isOvertime, shiftDate } = getWorkingHoursStatus();
+
     // Create activity log entry
     const activity = {
       activityType: isIdle ? 'idle' : 'active',
@@ -1201,6 +1441,8 @@ async function trackActivity() {
       keyboardEvents: keyboardEvents,
       mouseEvents: mouseEvents,
       mouseDistance: mouseDistance,
+      isOvertime: isOvertime,
+      shiftDate: shiftDate,
       metadata: {
         idleTime: idleTime,
         timestamp: new Date().toISOString()
@@ -1247,8 +1489,11 @@ async function sendActivityBatch() {
   const activitiesToSend = [...activityBuffer];
   activityBuffer = [];
 
+  const payloadSize = JSON.stringify({ activities: activitiesToSend }).length;
+  console.log(`Sending activity batch: ${activitiesToSend.length} entries, ~${payloadSize} bytes`);
+
   try {
-    await apiCallWithRetry(async () => {
+    const response = await apiCallWithRetry(async () => {
       return axios.post(
         `${CONFIG.API_URL}/api/activity/log/batch`,
         { activities: activitiesToSend },
@@ -1257,15 +1502,31 @@ async function sendActivityBatch() {
             'Authorization': `Bearer ${CONFIG.USER_TOKEN}`,
             'Content-Type': 'application/json'
           },
-          timeout: 10000 // 10 second timeout
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+          timeout: 30000
         }
       );
     });
-    console.log(`Sent ${activitiesToSend.length} activity logs`);
+
+    if (response.data.success) {
+      console.log(`Sent ${activitiesToSend.length} activity logs`);
+    } else {
+      console.error('Activity batch rejected by server:', response.data.message);
+    }
   } catch (error) {
-    console.error('Error sending activity batch after retries:', error.message);
-    // Re-add to buffer on failure (limit buffer size to prevent memory issues)
-    activityBuffer = [...activitiesToSend, ...activityBuffer].slice(0, 100);
+    const status = error.response?.status;
+    console.error(`Activity batch failed: status=${status}, message=${error.message}`);
+    if (error.response?.data) {
+      console.error('Server response:', JSON.stringify(error.response.data));
+    }
+
+    // Only re-queue on network/server errors, not client errors (4xx will always fail)
+    if (!status || status >= 500) {
+      activityBuffer = [...activitiesToSend, ...activityBuffer].slice(0, 100);
+    } else {
+      console.error('Client error - discarding batch (would always fail)');
+    }
   }
 }
 
@@ -1282,6 +1543,8 @@ async function sendHeartbeat() {
       currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle);
     }
 
+    const idleSeconds = getSystemIdleTime();
+
     await apiCallWithRetry(async () => {
       return axios.post(
         `${CONFIG.API_URL}/api/presence/heartbeat`,
@@ -1289,7 +1552,8 @@ async function sendHeartbeat() {
           status: isCurrentlyIdle ? 'idle' : 'online',
           current_application: appInfo.appName,
           current_window_title: appInfo.windowTitle,
-          current_url: currentUrl
+          current_url: currentUrl,
+          idleSeconds: idleSeconds
         },
         {
           headers: {

@@ -100,6 +100,9 @@ function Analytics({ user, onLogout }) {
     endDate: format(new Date(), 'yyyy-MM-dd')
   });
 
+  // Filter states
+  const [overtimeFilter, setOvertimeFilter] = useState('all'); // 'all', 'regular', 'overtime'
+
   // Data states
   const [summary, setSummary] = useState(null);
   const [productivityData, setProductivityData] = useState([]);
@@ -148,6 +151,8 @@ function Analytics({ user, onLogout }) {
         endDate: endOfDay(new Date(dateRange.endDate)).toISOString(),
         userId: selectedUserId
       });
+      if (overtimeFilter === 'regular') params.append('isOvertime', 'false');
+      if (overtimeFilter === 'overtime') params.append('isOvertime', 'true');
 
       // Fetch summary and productivity data
       const [summaryRes, productivityRes] = await Promise.all([
@@ -169,13 +174,17 @@ function Analytics({ user, onLogout }) {
               active_seconds: 0,
               idle_seconds: 0,
               keyboard_events: 0,
-              mouse_events: 0
+              mouse_events: 0,
+              overtime_active_seconds: 0,
+              overtime_idle_seconds: 0
             };
           }
           acc[date].active_seconds += parseInt(item.active_seconds) || 0;
           acc[date].idle_seconds += parseInt(item.idle_seconds) || 0;
           acc[date].keyboard_events += parseInt(item.keyboard_events) || 0;
           acc[date].mouse_events += parseInt(item.mouse_events) || 0;
+          acc[date].overtime_active_seconds += parseInt(item.overtime_active_seconds) || 0;
+          acc[date].overtime_idle_seconds += parseInt(item.overtime_idle_seconds) || 0;
           return acc;
         }, {});
 
@@ -183,15 +192,17 @@ function Analytics({ user, onLogout }) {
           ...d,
           active_hours: Math.round(d.active_seconds / 3600 * 10) / 10,
           idle_hours: Math.round(d.idle_seconds / 3600 * 10) / 10,
-          total_hours: Math.round((d.active_seconds + d.idle_seconds) / 3600 * 10) / 10
+          total_hours: Math.round((d.active_seconds + d.idle_seconds) / 3600 * 10) / 10,
+          overtime_hours: Math.round((d.overtime_active_seconds + d.overtime_idle_seconds) / 3600 * 10) / 10
         })).sort((a, b) => new Date(a.date) - new Date(b.date));
 
         setProductivityData(trendData);
       }
 
-      // Fetch hourly data for today
+      // Fetch hourly data for today (pass timezone so hours match local time)
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const hourlyRes = await axios.get(
-        `${API_URL}/api/reports/productivity/hourly?date=${format(new Date(), 'yyyy-MM-dd')}&userId=${selectedUserId}`,
+        `${API_URL}/api/reports/productivity/hourly?date=${format(new Date(), 'yyyy-MM-dd')}&userId=${selectedUserId}&timezone=${encodeURIComponent(userTimezone)}`,
         { headers }
       );
 
@@ -210,13 +221,13 @@ function Analytics({ user, onLogout }) {
     } finally {
       setLoading(false);
     }
-  }, [selectedUserId, dateRange]);
+  }, [selectedUserId, dateRange, overtimeFilter]);
 
   useEffect(() => {
     if (selectedUserId) {
       fetchAnalytics();
     }
-  }, [selectedUserId, dateRange, fetchAnalytics]);
+  }, [selectedUserId, dateRange, overtimeFilter, fetchAnalytics]);
 
   const selectUser = (u) => {
     setSelectedUserId(u.id);
@@ -438,6 +449,19 @@ function Analytics({ user, onLogout }) {
                 </div>
               </div>
 
+              <div className="filter-group">
+                <label>Hours</label>
+                <select
+                  value={overtimeFilter}
+                  onChange={(e) => setOvertimeFilter(e.target.value)}
+                  className="overtime-filter"
+                >
+                  <option value="all">All Hours</option>
+                  <option value="regular">Regular Only</option>
+                  <option value="overtime">Overtime Only</option>
+                </select>
+              </div>
+
               <div className="action-buttons">
                 <button className="refresh-btn" onClick={fetchAnalytics} disabled={loading}>
                   <Icons.Refresh />
@@ -521,6 +545,25 @@ function Analytics({ user, onLogout }) {
                       <div className="stat-label">Mouse Activity</div>
                     </div>
                   </div>
+
+                  {(() => {
+                    const totalOvertimeSeconds = productivityData.reduce((sum, d) =>
+                      sum + (d.overtime_active_seconds || 0) + (d.overtime_idle_seconds || 0), 0);
+                    if (totalOvertimeSeconds > 0) {
+                      return (
+                        <div className="stat-card">
+                          <div className="stat-icon" style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}>
+                            <Icons.Uptime />
+                          </div>
+                          <div className="stat-info">
+                            <div className="stat-value">{formatHoursWithMinutes(totalOvertimeSeconds / 3600)}</div>
+                            <div className="stat-label">Overtime</div>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 {/* Charts */}
@@ -609,6 +652,7 @@ function Analytics({ user, onLogout }) {
                           <th>Active Time</th>
                           <th>Idle Time</th>
                           <th>Total</th>
+                          <th>Overtime</th>
                           <th>Keyboard</th>
                           <th>Mouse</th>
                         </tr>
@@ -620,6 +664,7 @@ function Analytics({ user, onLogout }) {
                             <td>{formatDuration(day.active_seconds)}</td>
                             <td>{formatDuration(day.idle_seconds)}</td>
                             <td>{formatDuration(day.active_seconds + day.idle_seconds)}</td>
+                            <td>{formatDuration((day.overtime_active_seconds || 0) + (day.overtime_idle_seconds || 0))}</td>
                             <td>{day.keyboard_events.toLocaleString()}</td>
                             <td>{day.mouse_events.toLocaleString()}</td>
                           </tr>

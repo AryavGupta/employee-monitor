@@ -133,8 +133,8 @@ function Screenshots({ user, onLogout }) {
       const params = new URLSearchParams();
 
       params.append('userId', filters.userId);
-      params.append('startDate', `${filters.startDate}T${filters.startTime}:00Z`);
-      params.append('endDate', `${filters.endDate}T${filters.endTime}:59Z`);
+      params.append('startDate', new Date(`${filters.startDate}T${filters.startTime}:00`).toISOString());
+      params.append('endDate', new Date(`${filters.endDate}T${filters.endTime}:59`).toISOString());
       if (filters.flagged) params.append('flagged', filters.flagged);
       if (filters.interval) params.append('interval', filters.interval);
       params.append('limit', '100');

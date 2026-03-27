@@ -2,6 +2,77 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('./auth');
 
+// Close stale active sessions for a specific user.
+// Uses the best available "last alive" timestamp: heartbeat > activity_log > screenshot.
+// Called when: (1) user starts a new session, (2) dashboard fetches sessions (auto-cleanup).
+async function closeStaleSessionsForUser(pool, userId) {
+  return pool.query(
+    `UPDATE sessions s SET is_active = false,
+     end_time = COALESCE(
+       GREATEST(
+         (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
+         (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = $1 AND timestamp >= s.start_time),
+         (SELECT MAX(captured_at) FROM screenshots WHERE user_id = $1 AND captured_at >= s.start_time)
+       ),
+       (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
+       (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = $1 AND timestamp >= s.start_time),
+       (SELECT MAX(captured_at) FROM screenshots WHERE user_id = $1 AND captured_at >= s.start_time),
+       CURRENT_TIMESTAMP
+     ),
+     duration_seconds = EXTRACT(EPOCH FROM (
+       COALESCE(
+         GREATEST(
+           (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
+           (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = $1 AND timestamp >= s.start_time),
+           (SELECT MAX(captured_at) FROM screenshots WHERE user_id = $1 AND captured_at >= s.start_time)
+         ),
+         (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
+         (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = $1 AND timestamp >= s.start_time),
+         (SELECT MAX(captured_at) FROM screenshots WHERE user_id = $1 AND captured_at >= s.start_time),
+         CURRENT_TIMESTAMP
+       ) - s.start_time
+     ))
+     WHERE s.user_id = $1 AND s.is_active = true`,
+    [userId]
+  );
+}
+
+// Close ALL stale sessions across all users where heartbeat is older than 90 seconds.
+// Called when dashboard fetches session list — auto-cleans orphaned sessions.
+async function closeAllStaleSessions(pool) {
+  return pool.query(
+    `UPDATE sessions s SET is_active = false,
+     end_time = COALESCE(
+       GREATEST(
+         (SELECT last_heartbeat FROM user_presence WHERE user_id = s.user_id),
+         (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = s.user_id AND timestamp >= s.start_time),
+         (SELECT MAX(captured_at) FROM screenshots WHERE user_id = s.user_id AND captured_at >= s.start_time)
+       ),
+       (SELECT last_heartbeat FROM user_presence WHERE user_id = s.user_id),
+       (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = s.user_id AND timestamp >= s.start_time),
+       (SELECT MAX(captured_at) FROM screenshots WHERE user_id = s.user_id AND captured_at >= s.start_time),
+       CURRENT_TIMESTAMP
+     ),
+     duration_seconds = EXTRACT(EPOCH FROM (
+       COALESCE(
+         GREATEST(
+           (SELECT last_heartbeat FROM user_presence WHERE user_id = s.user_id),
+           (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = s.user_id AND timestamp >= s.start_time),
+           (SELECT MAX(captured_at) FROM screenshots WHERE user_id = s.user_id AND captured_at >= s.start_time)
+         ),
+         (SELECT last_heartbeat FROM user_presence WHERE user_id = s.user_id),
+         (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = s.user_id AND timestamp >= s.start_time),
+         (SELECT MAX(captured_at) FROM screenshots WHERE user_id = s.user_id AND captured_at >= s.start_time),
+         CURRENT_TIMESTAMP
+       ) - s.start_time
+     ))
+     WHERE s.is_active = true
+       AND (
+         NOT EXISTS (SELECT 1 FROM user_presence WHERE user_id = s.user_id AND last_heartbeat > NOW() - INTERVAL '5 minutes')
+       )`
+  );
+}
+
 // Start session
 router.post('/start', authenticateToken, async (req, res) => {
   try {
@@ -9,13 +80,8 @@ router.post('/start', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const { systemInfo } = req.body;
 
-    // End any existing active sessions
-    await pool.query(
-      `UPDATE sessions SET is_active = false, end_time = CURRENT_TIMESTAMP,
-       duration_seconds = EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - start_time))
-       WHERE user_id = $1 AND is_active = true`,
-      [userId]
-    );
+    // End any existing active sessions for this user
+    await closeStaleSessionsForUser(pool, userId);
 
     const result = await pool.query(
       `INSERT INTO sessions (user_id, start_time, system_info)
@@ -96,10 +162,34 @@ router.get('/', authenticateToken, async (req, res) => {
     const pool = req.app.locals.pool;
     const { userId, startDate, endDate, isActive, limit = 50, offset = 0 } = req.query;
 
+    // Auto-close stale sessions before returning results.
+    // Any session where heartbeat is >90s old gets closed with end_time = last known alive time.
+    // This handles: app killed from Task Manager, crash, uninstall, network loss, etc.
+    try {
+      await closeAllStaleSessions(pool);
+    } catch (cleanupError) {
+      // Non-critical — log but don't fail the request
+      console.error('Stale session cleanup error:', cleanupError.message);
+    }
+
     let query = `
-      SELECT s.*, u.email, u.full_name
+      SELECT s.*, u.email, u.full_name,
+        p.last_heartbeat,
+        p.idle_seconds,
+        CASE
+          WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' THEN true
+          ELSE false
+        END as effective_active,
+        CASE
+          WHEN s.end_time IS NOT NULL THEN 'logged_out'
+          WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' AND p.status = 'idle' THEN 'idle'
+          WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' THEN 'active'
+          WHEN s.is_active = true THEN 'disconnected'
+          ELSE 'logged_out'
+        END as effective_status
       FROM sessions s
       JOIN users u ON s.user_id = u.id
+      LEFT JOIN user_presence p ON s.user_id = p.user_id
       WHERE 1=1
     `;
     const params = [];

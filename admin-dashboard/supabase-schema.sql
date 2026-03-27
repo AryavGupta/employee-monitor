@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     is_idle BOOLEAN DEFAULT false,
     duration_seconds INTEGER,
     metadata JSONB,
+    is_overtime BOOLEAN DEFAULT false,
+    shift_date DATE,
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -186,8 +188,12 @@ CREATE TABLE IF NOT EXISTS user_presence (
     current_url VARCHAR(1000),
     last_heartbeat TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    idle_seconds INTEGER DEFAULT 0,
     UNIQUE(user_id)
 );
+
+-- Add idle_seconds to user_presence if not exists (migration for existing databases)
+ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS idle_seconds INTEGER DEFAULT 0;
 
 -- Alert rules for automated alerts
 CREATE TABLE IF NOT EXISTS alert_rules (
@@ -270,6 +276,8 @@ ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS is_blocked_attempt BOOLEAN DE
 -- Indexes for enhanced activity logs
 CREATE INDEX IF NOT EXISTS idx_activity_logs_domain ON activity_logs(domain);
 CREATE INDEX IF NOT EXISTS idx_activity_logs_blocked ON activity_logs(is_blocked_attempt) WHERE is_blocked_attempt = true;
+CREATE INDEX IF NOT EXISTS idx_activity_logs_shift_date ON activity_logs(user_id, shift_date);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_overtime ON activity_logs(is_overtime) WHERE is_overtime = true;
 
 -- =====================================================
 -- Default App Categories (Seed Data)

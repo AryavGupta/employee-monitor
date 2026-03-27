@@ -5,7 +5,7 @@ const { authenticateToken, getManagedUserIds } = require('./auth');
 // Log activity
 router.post('/log', authenticateToken, async (req, res) => {
   try {
-    const { activityType, applicationName, windowTitle, isIdle, durationSeconds, metadata } = req.body;
+    const { activityType, applicationName, windowTitle, isIdle, durationSeconds, metadata, isOvertime, shiftDate } = req.body;
     const userId = req.user.userId;
     const pool = req.app.locals.pool;
 
@@ -14,9 +14,9 @@ router.post('/log', authenticateToken, async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO activity_logs (user_id, activity_type, application_name, window_title, is_idle, duration_seconds, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, timestamp`,
-      [userId, activityType, applicationName || null, windowTitle || null, isIdle ?? false, durationSeconds ?? null, metadata ? JSON.stringify(metadata) : null]
+      `INSERT INTO activity_logs (user_id, activity_type, application_name, window_title, is_idle, duration_seconds, metadata, is_overtime, shift_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, timestamp`,
+      [userId, activityType, applicationName || null, windowTitle || null, isIdle ?? false, durationSeconds ?? null, metadata ? JSON.stringify(metadata) : null, isOvertime ?? false, shiftDate || null]
     );
 
     res.json({ success: true, message: 'Activity logged', data: result.rows[0] });
@@ -38,35 +38,80 @@ router.post('/log/batch', authenticateToken, async (req, res) => {
     }
 
     // Use a single batch insert for performance
-    const values = [];
-    const placeholders = [];
-    let paramIndex = 1;
+    // Try full insert first, fall back to core columns if newer columns don't exist
+    let insertSuccess = false;
 
-    for (const activity of activities) {
-      placeholders.push(`($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}, $${paramIndex + 4}, $${paramIndex + 5}, $${paramIndex + 6}, $${paramIndex + 7}, $${paramIndex + 8}, $${paramIndex + 9}, $${paramIndex + 10})`);
-      values.push(
-        userId,
-        activity.activityType,
-        activity.applicationName || null,
-        activity.windowTitle || null,
-        activity.isIdle ?? false,
-        activity.durationSeconds ?? null,
-        activity.keyboardEvents ?? 0,
-        activity.mouseEvents ?? 0,
-        activity.mouseDistance ?? 0,
-        activity.url || null,
-        activity.domain || null
-      );
-      paramIndex += 11;
+    // Attempt 1: Full insert with all columns (including enhanced tracking columns)
+    try {
+      const values = [];
+      const placeholders = [];
+      let paramIndex = 1;
+
+      for (const activity of activities) {
+        placeholders.push(`($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}, $${paramIndex + 4}, $${paramIndex + 5}, $${paramIndex + 6}, $${paramIndex + 7}, $${paramIndex + 8}, $${paramIndex + 9}, $${paramIndex + 10}, $${paramIndex + 11}, $${paramIndex + 12})`);
+        values.push(
+          userId,
+          activity.activityType,
+          activity.applicationName || null,
+          activity.windowTitle || null,
+          activity.isIdle ?? false,
+          activity.durationSeconds ?? null,
+          activity.keyboardEvents ?? 0,
+          activity.mouseEvents ?? 0,
+          activity.mouseDistance ?? 0,
+          activity.url || null,
+          activity.domain || null,
+          activity.isOvertime ?? false,
+          activity.shiftDate || null
+        );
+        paramIndex += 13;
+      }
+
+      const query = `
+        INSERT INTO activity_logs
+          (user_id, activity_type, application_name, window_title, is_idle, duration_seconds, keyboard_events, mouse_events, mouse_distance, url, domain, is_overtime, shift_date)
+        VALUES ${placeholders.join(', ')}
+      `;
+
+      await pool.query(query, values);
+      insertSuccess = true;
+    } catch (fullInsertError) {
+      // If it's a column-not-found error, try fallback with core columns only
+      if (fullInsertError.code === '42703') {
+        console.warn('Activity batch: some columns missing in DB, falling back to core columns. Run schema migrations to add: keyboard_events, mouse_events, mouse_distance, url, domain, is_overtime, shift_date');
+      } else {
+        throw fullInsertError; // Re-throw non-column errors
+      }
     }
 
-    const query = `
-      INSERT INTO activity_logs
-        (user_id, activity_type, application_name, window_title, is_idle, duration_seconds, keyboard_events, mouse_events, mouse_distance, url, domain)
-      VALUES ${placeholders.join(', ')}
-    `;
+    // Attempt 2: Fallback to core columns if newer columns don't exist in DB
+    if (!insertSuccess) {
+      const values = [];
+      const placeholders = [];
+      let paramIndex = 1;
 
-    await pool.query(query, values);
+      for (const activity of activities) {
+        placeholders.push(`($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}, $${paramIndex + 4}, $${paramIndex + 5}, $${paramIndex + 6})`);
+        values.push(
+          userId,
+          activity.activityType,
+          activity.applicationName || null,
+          activity.windowTitle || null,
+          activity.isIdle ?? false,
+          activity.durationSeconds ?? null,
+          activity.metadata ? JSON.stringify(activity.metadata) : null
+        );
+        paramIndex += 7;
+      }
+
+      const query = `
+        INSERT INTO activity_logs
+          (user_id, activity_type, application_name, window_title, is_idle, duration_seconds, metadata)
+        VALUES ${placeholders.join(', ')}
+      `;
+
+      await pool.query(query, values);
+    }
 
     res.json({ success: true, message: `${activities.length} activities logged`, count: activities.length });
   } catch (error) {

@@ -77,6 +77,10 @@ function UserActivity({ user, onLogout }) {
 
   useEffect(() => {
     fetchSessions();
+
+    // Auto-refresh every 30 seconds to detect status changes (Active → Disconnected)
+    const refreshInterval = setInterval(fetchSessions, 30000);
+    return () => clearInterval(refreshInterval);
   }, [fetchSessions]);
 
   // Calculate uptime for a single session
@@ -133,7 +137,35 @@ function UserActivity({ user, onLogout }) {
   };
 
   const getActiveUsers = () => {
-    return new Set(sessions.filter(s => !s.end_time).map(s => s.user_id)).size;
+    return new Set(sessions.filter(s => s.effective_status === 'active' || s.effective_status === 'idle').map(s => s.user_id)).size;
+  };
+
+  // Format idle seconds into human-readable string
+  const formatIdleTime = (seconds) => {
+    if (!seconds || seconds < 10) return null;
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (mins < 60) return `${mins}m ${secs}s`;
+    const hrs = Math.floor(mins / 60);
+    const remainMins = mins % 60;
+    return `${hrs}h ${remainMins}m`;
+  };
+
+  // Get status badge info based on effective_status from server
+  const getSessionStatus = (session) => {
+    const status = session.effective_status || (session.end_time ? 'logged_out' : 'active');
+    switch (status) {
+      case 'active':
+        return { label: 'Active', className: 'online', idle: null };
+      case 'idle':
+        return { label: 'Idle', className: 'idle', idle: formatIdleTime(session.idle_seconds) };
+      case 'disconnected':
+        return { label: 'Disconnected', className: 'disconnected', idle: null };
+      case 'logged_out':
+      default:
+        return { label: 'Logged Out', className: 'offline', idle: null };
+    }
   };
 
   if (user.role !== 'admin' && user.role !== 'team_manager') {
@@ -247,9 +279,26 @@ function UserActivity({ user, onLogout }) {
                       {calculateUptime(session)}
                     </td>
                     <td>
-                      <span className={`status-badge ${session.end_time ? 'offline' : 'online'}`}>
-                        {session.end_time ? 'Logged Out' : 'Active'}
-                      </span>
+                      {(() => {
+                        const statusInfo = getSessionStatus(session);
+                        return (
+                          <div>
+                            <span className={`status-badge ${statusInfo.className}`}>
+                              {statusInfo.label}
+                            </span>
+                            {statusInfo.idle && (
+                              <span className="idle-duration" style={{ marginLeft: '6px', fontSize: '0.85em', color: '#f59e0b' }}>
+                                ({statusInfo.idle})
+                              </span>
+                            )}
+                            {session.effective_status === 'disconnected' && session.last_heartbeat && (
+                              <div style={{ fontSize: '0.8em', color: '#9ca3af', marginTop: '2px' }}>
+                                Last seen: {format(new Date(session.last_heartbeat), 'hh:mm a')}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}

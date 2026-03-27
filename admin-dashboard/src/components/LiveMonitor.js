@@ -94,6 +94,18 @@ function LiveMonitor({ user, onLogout }) {
     }
   };
 
+  // Format idle seconds into human-readable string
+  const formatIdleTime = (seconds) => {
+    if (!seconds || seconds < 10) return null;
+    if (seconds < 60) return `${seconds}s idle`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (mins < 60) return `${mins}m ${secs}s idle`;
+    const hrs = Math.floor(mins / 60);
+    const remainMins = mins % 60;
+    return `${hrs}h ${remainMins}m idle`;
+  };
+
   const getActivityIcon = (activity) => {
     if (activity.is_blocked_attempt) return '🚫';
     if (activity.is_idle) return '💤';
@@ -215,6 +227,11 @@ function LiveMonitor({ user, onLogout }) {
                           {u.current_application && (
                             <span className="current-app" title={u.current_window_title}>
                               {u.current_application}
+                            </span>
+                          )}
+                          {u.effective_status === 'idle' && u.idle_seconds > 0 && (
+                            <span className="idle-time" style={{ color: '#f59e0b', fontSize: '0.85em' }}>
+                              {formatIdleTime(u.idle_seconds)}
                             </span>
                           )}
                           <span className="last-seen">

@@ -6,23 +6,27 @@ const { authenticateToken, authorizeAdmin } = require('./auth');
 router.get('/productivity', authenticateToken, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
-    const { userId, teamId, startDate, endDate, groupBy = 'day' } = req.query;
+    const { userId, teamId, startDate, endDate, groupBy = 'day', isOvertime } = req.query;
 
     // Build the base query for productivity data
+    // Use shift_date for grouping (handles night shifts crossing midnight)
+    // Falls back to DATE(timestamp) for old records without shift_date
     let query = `
       SELECT
         u.id as user_id,
         u.full_name,
         u.email,
         t.name as team_name,
-        DATE(a.timestamp) as date,
+        COALESCE(a.shift_date, DATE(a.timestamp)) as date,
         COUNT(*) as total_activities,
         COUNT(CASE WHEN a.is_idle = false THEN 1 END) as active_count,
         COUNT(CASE WHEN a.is_idle = true THEN 1 END) as idle_count,
         COALESCE(SUM(CASE WHEN a.is_idle = false THEN a.duration_seconds ELSE 0 END), 0) as active_seconds,
         COALESCE(SUM(CASE WHEN a.is_idle = true THEN a.duration_seconds ELSE 0 END), 0) as idle_seconds,
         COALESCE(SUM(a.keyboard_events), 0) as keyboard_events,
-        COALESCE(SUM(a.mouse_events), 0) as mouse_events
+        COALESCE(SUM(a.mouse_events), 0) as mouse_events,
+        COALESCE(SUM(CASE WHEN a.is_overtime = true AND a.is_idle = false THEN a.duration_seconds ELSE 0 END), 0) as overtime_active_seconds,
+        COALESCE(SUM(CASE WHEN a.is_overtime = true AND a.is_idle = true THEN a.duration_seconds ELSE 0 END), 0) as overtime_idle_seconds
       FROM activity_logs a
       JOIN users u ON a.user_id = u.id
       LEFT JOIN teams t ON u.team_id = t.id
@@ -61,8 +65,14 @@ router.get('/productivity', authenticateToken, async (req, res) => {
       paramCount++;
     }
 
-    // Group by date and user
-    query += ` GROUP BY u.id, u.full_name, u.email, t.name, DATE(a.timestamp) ORDER BY date DESC, u.full_name`;
+    if (isOvertime !== undefined) {
+      query += ` AND a.is_overtime = $${paramCount}`;
+      params.push(isOvertime === 'true');
+      paramCount++;
+    }
+
+    // Group by date (shift_date) and user
+    query += ` GROUP BY u.id, u.full_name, u.email, t.name, COALESCE(a.shift_date, DATE(a.timestamp)) ORDER BY date DESC, u.full_name`;
 
     const result = await pool.query(query, params);
 
@@ -91,7 +101,7 @@ router.get('/productivity', authenticateToken, async (req, res) => {
 router.get('/productivity/hourly', authenticateToken, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
-    const { userId, date } = req.query;
+    const { userId, date, timezone } = req.query;
 
     if (!date) {
       return res.status(400).json({ success: false, message: 'Date is required' });
@@ -99,9 +109,13 @@ router.get('/productivity/hourly', authenticateToken, async (req, res) => {
 
     let targetUserId = req.user.role === 'admin' && userId ? userId : req.user.userId;
 
+    // Use client timezone for hour extraction so graph matches user's local time
+    // Falls back to UTC if no timezone provided
+    const tz = timezone || 'UTC';
+
     const query = `
       SELECT
-        EXTRACT(HOUR FROM timestamp) as hour,
+        EXTRACT(HOUR FROM timestamp AT TIME ZONE $3) as hour,
         COUNT(*) as activity_count,
         COUNT(CASE WHEN is_idle = false THEN 1 END) as active_count,
         COUNT(CASE WHEN is_idle = true THEN 1 END) as idle_count,
@@ -110,12 +124,12 @@ router.get('/productivity/hourly', authenticateToken, async (req, res) => {
         COALESCE(SUM(mouse_events), 0) as mouse_events,
         COUNT(DISTINCT application_name) as unique_apps
       FROM activity_logs
-      WHERE user_id = $1 AND DATE(timestamp) = $2
-      GROUP BY EXTRACT(HOUR FROM timestamp)
+      WHERE user_id = $1 AND DATE(timestamp AT TIME ZONE $3) = $2
+      GROUP BY EXTRACT(HOUR FROM timestamp AT TIME ZONE $3)
       ORDER BY hour
     `;
 
-    const result = await pool.query(query, [targetUserId, date]);
+    const result = await pool.query(query, [targetUserId, date, tz]);
 
     // Fill in missing hours with zeros
     const hourlyData = Array.from({ length: 24 }, (_, i) => {

@@ -357,11 +357,65 @@ Before finalizing any change, verify:
 
 *No active issues at this time.*
 
+### RESOLVED — March 2026 (Stale Status & Real-time Idle)
+
+* **UserActivity showed "Active" after sleep/uninstall** (March 2026): UserActivity page determined status purely from `session.end_time` (NULL = "Active"). Sessions have no staleness check unlike the presence API's 90-second timeout. Sleep/disconnect/uninstall never sends session end → session stays `is_active = true` forever → dashboard shows "Active".
+  * **Fix**: JOIN `user_presence` in sessions GET endpoint. Added `effective_status` computed column with 4 states: `active` (heartbeat within 90s), `idle` (heartbeat within 90s + idle), `disconnected` (heartbeat stale but session still open), `logged_out` (session ended). Added 30-second auto-refresh to UserActivity. Shows "Last seen" time for disconnected users.
+  * **Affected files**: `api/routes/sessions.js` (GET /), `src/components/UserActivity.js`, `src/components/UserActivity.css`
+  * **Prevention**: Never determine "currently active" from session state alone. Always cross-reference with real-time presence (heartbeat staleness).
+
+* **Idle time not displayed in real-time** (March 2026): Heartbeat sent binary `online`/`idle` status but no idle duration. `user_presence` table had no `idle_seconds` column. Dashboard showed colored dots but no actual idle time.
+  * **Fix**: Desktop app sends `idleSeconds` (from `powerMonitor.getSystemIdleTime()`) in heartbeat. Server stores in new `idle_seconds` column on `user_presence`. LiveMonitor and UserActivity display idle duration for idle users.
+  * **Affected files**: `desktop-app/main.js` (sendHeartbeat), `api/routes/presence.js` (heartbeat upsert), `src/components/LiveMonitor.js`, `src/components/UserActivity.js`, `supabase-schema.sql`
+  * **Prevention**: When tracking status changes (online/idle/offline), also track the duration. Binary state without timing is insufficient for monitoring dashboards.
+
+### RESOLVED — March 2026 (Office Network Testing)
+
+* **Captive portal / firewall treated as server rejection** (March 2026): On office networks requiring firewall login, the captive portal returned HTTP 200 with HTML. `response.data.success` was undefined → treated as "server rejected token" → credentials wiped → login screen shown.
+  * **Fix**: Check `typeof response.data === 'object' && 'success' in response.data` before treating as a server response. Non-API responses treated as network errors (retry). Added 30-second boot delay for stored-credential users.
+  * **Affected files**: `desktop-app/main.js` — `checkStoredCredentials()`, `app.on('ready')`
+  * **Prevention**: Always verify HTTP responses are actually from our API before acting on them. Captive portals, load balancers, and CDNs can return 200 with unexpected content.
+
+* **Working hours configured but tracking never paused** (March 2026): `getWorkingHoursStatus()` only tagged `isOvertime` on activity logs. Tracking ran 24/7 regardless. Night shift team (10:30 PM–7:30 AM) had tracker active during daytime.
+  * **Fix**: Added `shouldTrackNow()` + `checkWorkingHoursAndToggle()` with 60-second check interval. Tracking auto-pauses outside working hours. Heartbeat stays running for presence.
+  * **Affected files**: `desktop-app/main.js` — `startScreenshotCapture()`
+  * **Prevention**: When adding "configuration" features (working hours, etc.), always implement the enforcement logic, not just the tagging.
+
+* **Shutdown logout time showed boot time** (March 2026, recurrence): Previous fix relied on `last_heartbeat` from `user_presence`, but Windows `powerMonitor.on('shutdown')` doesn't reliably complete. If `last_heartbeat` was NULL or stale, fell back to `CURRENT_TIMESTAMP` = boot time.
+  * **Fix**: Use `GREATEST(last_heartbeat, MAX(activity_log.timestamp), MAX(screenshot.captured_at))` for stale session end_time. Multiple fallback sources instead of just heartbeat.
+  * **Affected files**: `admin-dashboard/api/routes/sessions.js`
+  * **Prevention**: Never rely on a single signal for "last alive" time. Use the most recent of all available timestamps.
+
+* **Activity batch INSERT failing silently on missing columns** (March 2026): Batch endpoint used all enhanced columns (keyboard_events, mouse_events, etc.) which may not exist if DB migrations weren't run. SQL error 42703 → 500 → client retried then discarded.
+  * **Fix**: Try full INSERT first. On column-not-found error (42703), fall back to core columns (user_id, activity_type, etc.). Logs migration warning.
+  * **Affected files**: `admin-dashboard/api/routes/activity.js`
+  * **Prevention**: Always handle column-not-found gracefully in batch endpoints. Provide fallback for databases that haven't run all migrations.
+
 ---
 
 ### RESOLVED HISTORICAL
 
 *(Newest on top)*
+
+* **Firewall/VPN networks caused credential wipe on boot** (March 2026): `checkStoredCredentials()` called `store.delete('credentials')` on ANY error, including network timeouts. On networks requiring firewall login, the app couldn't reach the server at boot and wiped credentials every time.
+  * **Fix**: Progressive retry with delays (0s → 10s → 20s → 30s). Only clear credentials on 401/403 (server rejection). After all retries, start with stored credentials (offline-first).
+  * **Affected files**: `desktop-app/main.js` — `checkStoredCredentials()`
+  * **Prevention**: Never clear stored credentials on network errors. Only clear when the server explicitly rejects the token.
+
+* **Activity logs silently not uploading while screenshots worked** (March 2026): `sendActivityBatch()` had 10s timeout (vs 30s for screenshots), no `maxContentLength`/`maxBodyLength`, no response validation, and re-queued failed batches on 400 errors (infinite loop).
+  * **Fix**: Increased timeout to 30s, added Infinity content limits, validate `response.data.success`, only re-queue on 5xx/network errors.
+  * **Affected files**: `desktop-app/main.js` — `sendActivityBatch()`
+  * **Prevention**: When adding new API upload functions, match the configuration (timeout, content limits, error handling) of existing working uploads like screenshot upload.
+
+* **Shutdown logout time showed boot time not shutdown time** (March 2026): No `powerMonitor.on('shutdown')` handler existed. Sessions stayed `is_active = true` after shutdown. On next boot, stale session cleanup used `CURRENT_TIMESTAMP` (= boot time) as `end_time`.
+  * **Fix**: Added shutdown handler in desktop app. Server now uses `last_heartbeat` from `user_presence` for stale session `end_time` (worst case ~30s off instead of hours).
+  * **Affected files**: `desktop-app/main.js`, `api/routes/sessions.js`
+  * **Prevention**: Always handle system shutdown/crash scenarios for long-running tracking apps. Use last-known-alive timestamps instead of "now" for stale record cleanup.
+
+* **Team working hours stored but never enforced** (March 2026): Database and UI supported `working_hours_start/end` but desktop app ignored them. Night shift teams tracked 24/7. Analytics split night shifts across two calendar days.
+  * **Fix**: Desktop app checks working hours and flags activity as `is_overtime`. Night shifts crossing midnight assign `shift_date` = date shift started. Analytics groups by `shift_date` instead of `DATE(timestamp)`. Added overtime filter and stat card.
+  * **Affected files**: `desktop-app/main.js`, `api/routes/activity.js`, `api/routes/reports.js`, `src/components/Analytics.js`, `supabase-schema.sql`
+  * **Prevention**: When adding configuration fields to the database/UI, implement the enforcement logic at the same time.
 
 * **Admin quit didn't actually quit — tray icon lingered** (February 2026): After admin authenticated to quit, `app.quit()` fired `close` on `mainWindow`, but the close handler always called `preventDefault()` when `tray` existed, preventing the app from exiting. The tray icon persisted as an orphan with stale tracking UI.
   * **Fix**: Added `isQuitting` flag set before `app.quit()`. Close handler skips `preventDefault()` when `isQuitting` is true. Tray is explicitly destroyed before quitting.

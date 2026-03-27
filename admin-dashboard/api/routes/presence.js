@@ -5,23 +5,44 @@ const { authenticateToken, authorizeAdmin, authorizeAdminOrManager, getManagedTe
 // Heartbeat - Desktop app sends this every 30 seconds
 router.post('/heartbeat', authenticateToken, async (req, res) => {
   try {
-    const { status, currentApplication, windowTitle, currentUrl, sessionId } = req.body;
+    const { status, currentApplication, windowTitle, currentUrl, sessionId, idleSeconds } = req.body;
     const userId = req.user.userId;
     const pool = req.app.locals.pool;
 
-    // Upsert user presence
-    await pool.query(`
-      INSERT INTO user_presence (user_id, status, current_application, current_window_title, current_url, session_id, last_heartbeat)
-      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
-      ON CONFLICT (user_id)
-      DO UPDATE SET
-        status = $2,
-        current_application = $3,
-        current_window_title = $4,
-        current_url = $5,
-        session_id = $6,
-        last_heartbeat = CURRENT_TIMESTAMP
-    `, [userId, status || 'online', currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null]);
+    // Upsert user presence (with idle_seconds if column exists)
+    try {
+      await pool.query(`
+        INSERT INTO user_presence (user_id, status, current_application, current_window_title, current_url, session_id, last_heartbeat, idle_seconds)
+        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7)
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+          status = $2,
+          current_application = $3,
+          current_window_title = $4,
+          current_url = $5,
+          session_id = $6,
+          last_heartbeat = CURRENT_TIMESTAMP,
+          idle_seconds = $7
+      `, [userId, status || 'online', currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null, idleSeconds ?? 0]);
+    } catch (columnError) {
+      // Fallback if idle_seconds column doesn't exist yet
+      if (columnError.code === '42703') {
+        await pool.query(`
+          INSERT INTO user_presence (user_id, status, current_application, current_window_title, current_url, session_id, last_heartbeat)
+          VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+          ON CONFLICT (user_id)
+          DO UPDATE SET
+            status = $2,
+            current_application = $3,
+            current_window_title = $4,
+            current_url = $5,
+            session_id = $6,
+            last_heartbeat = CURRENT_TIMESTAMP
+        `, [userId, status || 'online', currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null]);
+      } else {
+        throw columnError;
+      }
+    }
 
     res.json({ success: true, message: 'Heartbeat received' });
   } catch (error) {

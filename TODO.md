@@ -15,10 +15,18 @@
 
 ### UI/UX Improvements
 - [ ] Add loading skeletons instead of "Loading..." text
-- [ ] Add real-time WebSocket updates for presence status
+- [x] Real-time idle time display on dashboard - COMPLETED
+- [x] 4-state session status (Active/Idle/Disconnected/Logged Out) - COMPLETED
+- [x] Auto-refresh on User Activity page (30s) - COMPLETED
+- [x] Timezone-correct hourly activity graph - COMPLETED
+- [ ] Add real-time WebSocket updates for presence status (currently polling every 10-30s)
 
 ### Desktop App
 - [x] Package for distribution (Windows installer) - COMPLETED
+- [x] Firewall/VPN network support (30s boot delay + captive portal detection) - COMPLETED
+- [x] Working hours enforcement (auto-pause/resume tracking) - COMPLETED
+- [x] Sleep/wake session handling (<5 min resumes, >5 min new session) - COMPLETED
+- [ ] Fix "Unknown" application name in activity logs (PowerShell detection issue)
 - [ ] Add auto-update functionality
 - [ ] Add system tray tooltip with current status
 - [ ] Package for Mac (DMG) and Linux
@@ -47,6 +55,104 @@
 ---
 
 ## Recently Completed
+
+### Stale "Active" Status Fix & Real-time Idle Display (March 2026) - COMPLETED
+**2 issues fixed:**
+
+1. **User shown as "Active" after sleep/disconnect/uninstall**
+   - Sessions GET endpoint now JOINs `user_presence` for real-time status cross-reference
+   - 4-state status: Active (green), Idle (orange), Disconnected (red), Logged Out (gray)
+   - "Disconnected" = session open but no heartbeat in 90+ seconds
+   - Shows "Last seen" time for disconnected users
+   - Auto-refresh every 30 seconds
+   - Files: `api/routes/sessions.js`, `src/components/UserActivity.js`, `src/components/UserActivity.css`
+
+2. **Idle time now shown in real-time**
+   - Desktop app sends `idleSeconds` from `powerMonitor.getSystemIdleTime()` in heartbeat
+   - New `idle_seconds` column on `user_presence` table
+   - LiveMonitor shows idle duration (e.g., "3m 45s idle") next to idle users
+   - UserActivity shows idle duration for current idle sessions
+   - Files: `desktop-app/main.js`, `api/routes/presence.js`, `src/components/LiveMonitor.js`, `src/components/UserActivity.js`, `supabase-schema.sql`
+
+**Migration required:**
+```sql
+ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS idle_seconds INTEGER DEFAULT 0;
+```
+
+---
+
+### Desktop App Office Network & Tracking Fixes (March 2026) - COMPLETED
+**4 issues fixed (reported from production testing on 3 systems):**
+
+1. **Firewall/VPN networks — app shows login instead of auto-login**
+   - Systems behind corporate firewalls need network auth before internet access
+   - App launched immediately at boot, before user could authenticate with firewall
+   - Captive portal pages returned HTTP 200 with HTML → app treated as "token rejected" → wiped credentials
+   - Fix: Added 30-second startup delay for auto-login users to allow firewall auth
+   - Fix: Detect non-API responses (captive portal HTML) and treat as network error (retry, don't wipe)
+   - Files: `desktop-app/main.js` — `app.on('ready')`, `checkStoredCredentials()`
+
+2. **Night shift working hours not enforced — tracker ran 24/7**
+   - Team "Night" with 10:30 PM–7:30 AM hours had tracker active all day
+   - `getWorkingHoursStatus()` only tagged overtime but never paused tracking
+   - Fix: Added `shouldTrackNow()` check + 60-second working hours enforcement interval
+   - Tracking auto-pauses outside working hours, auto-resumes when hours begin
+   - Heartbeat keeps running outside hours for presence visibility
+   - Files: `desktop-app/main.js` — `startScreenshotCapture()`, `checkWorkingHoursAndToggle()`
+
+3. **Shutdown logout time showed boot time (e.g., 5 PM instead of 1 PM)**
+   - Windows `powerMonitor.on('shutdown')` doesn't reliably fire/complete before OS kills the app
+   - Stale session cleanup fell back to `CURRENT_TIMESTAMP` (boot time) when `last_heartbeat` was unavailable
+   - Fix: Use GREATEST of (last_heartbeat, last activity_log, last screenshot) as session end_time
+   - Provides accurate logout time within ~30-60 seconds of actual shutdown
+   - Files: `admin-dashboard/api/routes/sessions.js` — stale session cleanup query
+
+4. **Activity logs not saving to database (only screenshots worked)**
+   - Batch INSERT included newer columns (keyboard_events, mouse_events, etc.) that may not exist in DB
+   - SQL error → 500 response → client re-queued → infinite retry loop → silent data loss
+   - Fix: Try full INSERT, on column-not-found error (42703) fall back to core columns only
+   - Logs warning to add missing columns via migration
+   - Files: `admin-dashboard/api/routes/activity.js` — batch endpoint
+
+---
+
+## Recently Completed
+
+### Desktop App & API Fixes (March 2026) - COMPLETED
+**4 issues fixed:**
+
+1. **Firewall login — credentials wiped on network timeout**
+   - App cleared stored credentials on ANY auth failure, including network timeouts
+   - Fix: Progressive retry (immediate → 10s → 20s → 30s delays) with offline-first fallback
+   - Only clears credentials on 401/403 (server rejection), never on network errors
+   - Files: `desktop-app/main.js` — `checkStoredCredentials()`
+
+2. **Night shift working hours / overtime tracking**
+   - Team working hours settings were stored but never enforced
+   - Fix: Desktop app checks `working_hours_start/end` and flags activity as overtime
+   - Night shifts crossing midnight handled correctly (shift date = date shift starts)
+   - Analytics: overtime filter (All/Regular/Overtime), overtime stat card, overtime column in daily breakdown
+   - Files: `desktop-app/main.js`, `api/routes/activity.js`, `api/routes/reports.js`, `src/components/Analytics.js`, `supabase-schema.sql`
+   - **Database migration required:**
+     ```sql
+     ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS is_overtime BOOLEAN DEFAULT false;
+     ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS shift_date DATE;
+     CREATE INDEX IF NOT EXISTS idx_activity_logs_shift_date ON activity_logs(user_id, shift_date);
+     CREATE INDEX IF NOT EXISTS idx_activity_logs_overtime ON activity_logs(is_overtime) WHERE is_overtime = true;
+     ```
+
+3. **Shutdown logout time shows boot time instead of shutdown time**
+   - No shutdown handler existed; stale sessions closed with `CURRENT_TIMESTAMP` (= boot time)
+   - Fix: Added `powerMonitor.on('shutdown')` handler + `before-quit` safety net
+   - Server uses `last_heartbeat` from `user_presence` for stale session end_time (worst case ~30s off)
+   - Files: `desktop-app/main.js`, `api/routes/sessions.js`
+
+4. **Activity logs not uploading (screenshots worked fine)**
+   - Timeout too short (10s vs 30s for screenshots), no `maxContentLength`, no response validation
+   - Failed batches re-queued on 400 errors causing infinite failure loops
+   - Fix: 30s timeout, Infinity content limits, response validation, discard on 4xx
+   - Files: `desktop-app/main.js` — `sendActivityBatch()`
+
 
 ### Desktop App Fixes (February 2026) - COMPLETED
 - Removed "Running in background" notification on window close (stealth improvement)

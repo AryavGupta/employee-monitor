@@ -171,6 +171,16 @@
   color: #64748b;
 }
 
+.status-badge.idle {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.status-badge.disconnected {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
 /* No Data */
 .no-data {
   padding: 48px 24px;
