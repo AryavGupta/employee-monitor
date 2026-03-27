@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-import { format, subDays, startOfDay, endOfDay } from 'date-fns';
+import { format, subDays, addDays, startOfDay, endOfDay } from 'date-fns';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { jsPDF } from 'jspdf';
 import Sidebar from './Sidebar';
@@ -107,6 +107,12 @@ function Analytics({ user, onLogout }) {
   const [summary, setSummary] = useState(null);
   const [productivityData, setProductivityData] = useState([]);
   const [hourlyData, setHourlyData] = useState([]);
+
+  // Shift attendance states
+  const [shiftDate, setShiftDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [shiftData, setShiftData] = useState(null);
+  const [shiftLoading, setShiftLoading] = useState(false);
+  const shiftRefreshTimer = useRef(null);
 
   // Fetch users on mount
   useEffect(() => {
@@ -228,6 +234,44 @@ function Analytics({ user, onLogout }) {
       fetchAnalytics();
     }
   }, [selectedUserId, dateRange, overtimeFilter, fetchAnalytics]);
+
+  // Fetch shift attendance data
+  const fetchShiftAttendance = useCallback(async () => {
+    if (!selectedUserId) return;
+    setShiftLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const params = new URLSearchParams({ userId: selectedUserId, shiftDate, timezone: tz });
+      const res = await axios.get(`${API_URL}/api/reports/shift-attendance?${params}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data.success) {
+        setShiftData(res.data.data);
+      }
+    } catch (error) {
+      console.error('Error fetching shift attendance:', error);
+    } finally {
+      setShiftLoading(false);
+    }
+  }, [selectedUserId, shiftDate]);
+
+  useEffect(() => {
+    if (selectedUserId) {
+      fetchShiftAttendance();
+    } else {
+      setShiftData(null);
+    }
+  }, [selectedUserId, shiftDate, fetchShiftAttendance]);
+
+  // Auto-refresh shift data every 30s if there's an active session
+  useEffect(() => {
+    if (shiftRefreshTimer.current) clearInterval(shiftRefreshTimer.current);
+    if (shiftData?.summary?.is_active) {
+      shiftRefreshTimer.current = setInterval(fetchShiftAttendance, 30000);
+    }
+    return () => { if (shiftRefreshTimer.current) clearInterval(shiftRefreshTimer.current); };
+  }, [shiftData?.summary?.is_active, fetchShiftAttendance]);
 
   const selectUser = (u) => {
     setSelectedUserId(u.id);
@@ -476,6 +520,120 @@ function Analytics({ user, onLogout }) {
                   CSV Export
                 </button>
               </div>
+            </div>
+
+            {/* Shift Attendance Section */}
+            <div className="shift-attendance">
+              <div className="shift-header">
+                <h3>Shift Attendance</h3>
+                <div className="shift-nav">
+                  <button className="shift-nav-btn" onClick={() => setShiftDate(format(addDays(new Date(shiftDate + 'T00:00:00'), -1), 'yyyy-MM-dd'))}>
+                    &larr;
+                  </button>
+                  <button
+                    className={`shift-quick-btn ${shiftDate === format(new Date(), 'yyyy-MM-dd') ? 'active' : ''}`}
+                    onClick={() => setShiftDate(format(new Date(), 'yyyy-MM-dd'))}
+                  >
+                    Today
+                  </button>
+                  <button
+                    className={`shift-quick-btn ${shiftDate === format(subDays(new Date(), 1), 'yyyy-MM-dd') ? 'active' : ''}`}
+                    onClick={() => setShiftDate(format(subDays(new Date(), 1), 'yyyy-MM-dd'))}
+                  >
+                    Yesterday
+                  </button>
+                  <button className="shift-nav-btn" onClick={() => setShiftDate(format(addDays(new Date(shiftDate + 'T00:00:00'), 1), 'yyyy-MM-dd'))}>
+                    &rarr;
+                  </button>
+                </div>
+              </div>
+
+              <div className="shift-date-label">
+                {format(new Date(shiftDate + 'T00:00:00'), 'EEEE, MMMM dd, yyyy')}
+                {shiftData?.shift && (
+                  <span className={`shift-badge ${shiftData.shift.is_night_shift ? 'night' : 'day'}`}>
+                    {shiftData.shift.label}
+                  </span>
+                )}
+                {shiftData?.shift?.working_hours_start && (
+                  <span className="shift-time-range">
+                    {shiftData.shift.working_hours_start} &ndash; {shiftData.shift.working_hours_end}
+                  </span>
+                )}
+              </div>
+
+              {shiftLoading ? (
+                <div className="shift-loading">Loading shift data...</div>
+              ) : shiftData?.summary?.session_count > 0 || shiftData?.summary?.activity_count > 0 ? (
+                <>
+                  <div className="shift-stats-grid">
+                    <div className="shift-stat">
+                      <div className="shift-stat-label">Login</div>
+                      <div className="shift-stat-value">
+                        {shiftData.summary.first_login
+                          ? format(new Date(shiftData.summary.first_login), 'hh:mm a')
+                          : '--'}
+                      </div>
+                    </div>
+                    <div className="shift-stat">
+                      <div className="shift-stat-label">Logout</div>
+                      <div className="shift-stat-value">
+                        {shiftData.summary.is_active
+                          ? 'Active'
+                          : shiftData.summary.last_logout
+                            ? format(new Date(shiftData.summary.last_logout), 'hh:mm a')
+                            : '--'}
+                      </div>
+                    </div>
+                    <div className="shift-stat">
+                      <div className="shift-stat-label">Total Hours</div>
+                      <div className="shift-stat-value">{formatDuration(shiftData.summary.total_seconds)}</div>
+                    </div>
+                    <div className="shift-stat">
+                      <div className="shift-stat-label">Active Time</div>
+                      <div className="shift-stat-value active">{formatDuration(shiftData.summary.active_seconds)}</div>
+                    </div>
+                    <div className="shift-stat">
+                      <div className="shift-stat-label">Idle Time</div>
+                      <div className="shift-stat-value idle">{formatDuration(shiftData.summary.idle_seconds)}</div>
+                    </div>
+                  </div>
+
+                  {shiftData.sessions.length > 1 && (
+                    <div className="shift-sessions">
+                      <h4>Sessions ({shiftData.sessions.length})</h4>
+                      <table className="breakdown-table">
+                        <thead>
+                          <tr>
+                            <th>#</th>
+                            <th>Login</th>
+                            <th>Logout</th>
+                            <th>Duration</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {shiftData.sessions.map((s, i) => (
+                            <tr key={s.id}>
+                              <td>{i + 1}</td>
+                              <td>{format(new Date(s.start_time), 'hh:mm a')}</td>
+                              <td>{s.end_time ? format(new Date(s.end_time), 'hh:mm a') : 'Active'}</td>
+                              <td>{formatDuration(s.duration_seconds)}</td>
+                              <td>
+                                <span className={`shift-status ${s.effective_status}`}>
+                                  {s.effective_status.replace('_', ' ')}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="shift-empty">No attendance recorded for this shift</div>
+              )}
             </div>
 
             {loading ? (

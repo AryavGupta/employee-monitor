@@ -479,6 +479,155 @@ router.get('/dashboard-summary', authenticateToken, async (req, res) => {
   }
 });
 
+// Get shift-based attendance for a single user on a specific shift date
+router.get('/shift-attendance', authenticateToken, async (req, res) => {
+  try {
+    const pool = req.app.locals.pool;
+    const { userId, shiftDate, timezone } = req.query;
+
+    if (!shiftDate) {
+      return res.status(400).json({ success: false, message: 'shiftDate is required' });
+    }
+
+    const targetUserId = req.user.role === 'admin' && userId ? userId : req.user.userId;
+    const tz = timezone || 'UTC';
+
+    // 1. Get user's team working hours
+    const teamResult = await pool.query(
+      `SELECT tms.working_hours_start, tms.working_hours_end
+       FROM users u
+       LEFT JOIN team_monitoring_settings tms ON tms.team_id = u.team_id
+       WHERE u.id = $1`,
+      [targetUserId]
+    );
+
+    const teamSettings = teamResult.rows[0] || {};
+    const whStart = teamSettings.working_hours_start; // e.g. '22:30:00'
+    const whEnd = teamSettings.working_hours_end;     // e.g. '07:30:00'
+
+    // 2. Compute shift time window in user's timezone, then convert to UTC
+    let shiftStartLocal, shiftEndLocal, isNightShift = false, shiftLabel = 'Full Day';
+
+    if (whStart && whEnd) {
+      // Parse HH:MM or HH:MM:SS
+      const startParts = whStart.split(':').map(Number);
+      const endParts = whEnd.split(':').map(Number);
+      const startMinutes = startParts[0] * 60 + startParts[1];
+      const endMinutes = endParts[0] * 60 + endParts[1];
+
+      isNightShift = startMinutes > endMinutes;
+
+      // Shift start: shiftDate + working_hours_start in user's timezone
+      shiftStartLocal = `${shiftDate}T${whStart.substring(0, 5)}:00`;
+      if (isNightShift) {
+        // Night shift: ends next day
+        const nextDay = new Date(new Date(shiftDate).getTime() + 86400000).toISOString().split('T')[0];
+        shiftEndLocal = `${nextDay}T${whEnd.substring(0, 5)}:00`;
+        shiftLabel = 'Night Shift';
+      } else {
+        shiftEndLocal = `${shiftDate}T${whEnd.substring(0, 5)}:00`;
+        shiftLabel = 'Day Shift';
+      }
+    } else {
+      // No working hours — full calendar day
+      shiftStartLocal = `${shiftDate}T00:00:00`;
+      const nextDay = new Date(new Date(shiftDate).getTime() + 86400000).toISOString().split('T')[0];
+      shiftEndLocal = `${nextDay}T00:00:00`;
+    }
+
+    // Convert local shift boundaries to UTC using PostgreSQL AT TIME ZONE
+    const boundsResult = await pool.query(
+      `SELECT
+        ($1::timestamp AT TIME ZONE $3) AT TIME ZONE 'UTC' as shift_start_utc,
+        ($2::timestamp AT TIME ZONE $3) AT TIME ZONE 'UTC' as shift_end_utc`,
+      [shiftStartLocal, shiftEndLocal, tz]
+    );
+    const { shift_start_utc, shift_end_utc } = boundsResult.rows[0];
+
+    // 3. Query sessions within shift window
+    const sessionsResult = await pool.query(
+      `SELECT s.id, s.start_time, s.end_time, s.is_active,
+              s.duration_seconds, s.active_seconds, s.idle_seconds,
+              p.last_heartbeat, p.status as presence_status, p.idle_seconds as presence_idle_seconds,
+              CASE
+                WHEN s.end_time IS NOT NULL THEN 'logged_out'
+                WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' AND p.status = 'idle' THEN 'idle'
+                WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' THEN 'active'
+                WHEN s.is_active = true THEN 'disconnected'
+                ELSE 'logged_out'
+              END as effective_status
+       FROM sessions s
+       LEFT JOIN user_presence p ON s.user_id = p.user_id
+       WHERE s.user_id = $1 AND s.start_time >= $2 AND s.start_time < $3
+       ORDER BY s.start_time ASC`,
+      [targetUserId, shift_start_utc, shift_end_utc]
+    );
+
+    // 4. Query activity summary for this shift_date
+    const activityResult = await pool.query(
+      `SELECT
+        COALESCE(SUM(CASE WHEN is_idle = false THEN duration_seconds ELSE 0 END), 0) as active_seconds,
+        COALESCE(SUM(CASE WHEN is_idle = true THEN duration_seconds ELSE 0 END), 0) as idle_seconds,
+        COALESCE(SUM(duration_seconds), 0) as total_seconds,
+        MIN(timestamp) as first_activity,
+        MAX(timestamp) as last_activity,
+        COUNT(*) as activity_count
+       FROM activity_logs
+       WHERE user_id = $1 AND shift_date = $2`,
+      [targetUserId, shiftDate]
+    );
+
+    const activity = activityResult.rows[0];
+    const sessions = sessionsResult.rows;
+
+    // Compute first login / last logout from sessions
+    const firstLogin = sessions.length > 0 ? sessions[0].start_time : null;
+    const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
+    const lastLogout = lastSession?.end_time || null;
+    const hasActiveSession = sessions.some(s => s.effective_status === 'active' || s.effective_status === 'idle');
+
+    res.json({
+      success: true,
+      data: {
+        shift: {
+          date: shiftDate,
+          start_local: shiftStartLocal,
+          end_local: shiftEndLocal,
+          start_utc: shift_start_utc,
+          end_utc: shift_end_utc,
+          working_hours_start: whStart ? whStart.substring(0, 5) : null,
+          working_hours_end: whEnd ? whEnd.substring(0, 5) : null,
+          is_night_shift: isNightShift,
+          label: shiftLabel
+        },
+        sessions: sessions.map(s => ({
+          id: s.id,
+          start_time: s.start_time,
+          end_time: s.end_time,
+          duration_seconds: parseInt(s.duration_seconds) || 0,
+          active_seconds: parseInt(s.active_seconds) || 0,
+          idle_seconds: parseInt(s.idle_seconds) || 0,
+          effective_status: s.effective_status,
+          presence_idle_seconds: parseInt(s.presence_idle_seconds) || 0
+        })),
+        summary: {
+          first_login: firstLogin,
+          last_logout: lastLogout,
+          is_active: hasActiveSession,
+          total_seconds: parseInt(activity.total_seconds) || 0,
+          active_seconds: parseInt(activity.active_seconds) || 0,
+          idle_seconds: parseInt(activity.idle_seconds) || 0,
+          session_count: sessions.length,
+          activity_count: parseInt(activity.activity_count) || 0
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get shift attendance error:', error);
+    res.status(500).json({ success: false, message: 'Failed to retrieve shift attendance' });
+  }
+});
+
 // =====================================================
 // App Categories Management
 // =====================================================
