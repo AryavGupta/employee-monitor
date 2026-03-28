@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-import { format, subDays, addDays, startOfDay, endOfDay } from 'date-fns';
+import { format, subDays, startOfDay, endOfDay } from 'date-fns';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { jsPDF } from 'jspdf';
 import Sidebar from './Sidebar';
@@ -107,17 +107,6 @@ function Analytics({ user, onLogout }) {
   const [summary, setSummary] = useState(null);
   const [productivityData, setProductivityData] = useState([]);
   const [hourlyData, setHourlyData] = useState([]);
-
-  // Shift attendance states
-  const [shiftDate, setShiftDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [shiftData, setShiftData] = useState(null);
-  const [shiftLoading, setShiftLoading] = useState(false);
-  const shiftRefreshTimer = useRef(null);
-
-  // Activity log states
-  const [activityLog, setActivityLog] = useState([]);
-  const [activityLogLoading, setActivityLogLoading] = useState(false);
-  const [showActivityLog, setShowActivityLog] = useState(false);
 
   // Fetch users on mount
   useEffect(() => {
@@ -240,66 +229,6 @@ function Analytics({ user, onLogout }) {
     }
   }, [selectedUserId, dateRange, overtimeFilter, fetchAnalytics]);
 
-  // Fetch shift attendance data
-  const fetchShiftAttendance = useCallback(async () => {
-    if (!selectedUserId) return;
-    setShiftLoading(true);
-    try {
-      const token = localStorage.getItem('token');
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const params = new URLSearchParams({ userId: selectedUserId, shiftDate, timezone: tz });
-      const res = await axios.get(`${API_URL}/api/reports/shift-attendance?${params}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.data.success) {
-        setShiftData(res.data.data);
-      }
-    } catch (error) {
-      console.error('Error fetching shift attendance:', error);
-    } finally {
-      setShiftLoading(false);
-    }
-  }, [selectedUserId, shiftDate]);
-
-  // Fetch activity log for the shift
-  const fetchActivityLog = useCallback(async () => {
-    if (!selectedUserId || !shiftDate) return;
-    setActivityLogLoading(true);
-    try {
-      const token = localStorage.getItem('token');
-      const params = new URLSearchParams({ userId: selectedUserId, shiftDate, sort: 'asc', limit: '500' });
-      const res = await axios.get(`${API_URL}/api/activity?${params}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.data.success) {
-        setActivityLog(res.data.data);
-      }
-    } catch (error) {
-      console.error('Error fetching activity log:', error);
-    } finally {
-      setActivityLogLoading(false);
-    }
-  }, [selectedUserId, shiftDate]);
-
-  useEffect(() => {
-    if (selectedUserId) {
-      fetchShiftAttendance();
-      if (showActivityLog) fetchActivityLog();
-    } else {
-      setShiftData(null);
-      setActivityLog([]);
-    }
-  }, [selectedUserId, shiftDate, fetchShiftAttendance, fetchActivityLog, showActivityLog]);
-
-  // Auto-refresh shift data every 30s if there's an active session
-  useEffect(() => {
-    if (shiftRefreshTimer.current) clearInterval(shiftRefreshTimer.current);
-    if (shiftData?.summary?.is_active) {
-      shiftRefreshTimer.current = setInterval(fetchShiftAttendance, 30000);
-    }
-    return () => { if (shiftRefreshTimer.current) clearInterval(shiftRefreshTimer.current); };
-  }, [shiftData?.summary?.is_active, fetchShiftAttendance]);
-
   const selectUser = (u) => {
     setSelectedUserId(u.id);
     setSelectedUserName(u.full_name);
@@ -311,20 +240,6 @@ function Analytics({ user, onLogout }) {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     return `${hours}h ${minutes}m`;
-  };
-
-  // Get display detail for an activity entry (URL, file path, or window title)
-  const getActivityDetail = (entry) => {
-    if (entry.url) {
-      if (entry.url.startsWith('file:///')) {
-        return { type: 'file', value: decodeURIComponent(entry.url.replace('file:///', '')) };
-      }
-      return { type: 'url', value: entry.url, domain: entry.domain };
-    }
-    if (entry.window_title && entry.window_title !== 'Unknown') {
-      return { type: 'window', value: entry.window_title };
-    }
-    return { type: 'none', value: '' };
   };
 
   // Format decimal hours to "Xh Ym" format (e.g., 0.033 hours -> "0h 2m")
@@ -515,189 +430,6 @@ function Analytics({ user, onLogout }) {
           </div>
         ) : (
           <>
-            {/* Shift Attendance Section */}
-            <div className="shift-attendance">
-              <div className="shift-header">
-                <h3>Shift Attendance</h3>
-                <div className="shift-nav">
-                  <button className="shift-nav-btn" onClick={() => setShiftDate(format(addDays(new Date(shiftDate + 'T00:00:00'), -1), 'yyyy-MM-dd'))}>
-                    &larr;
-                  </button>
-                  <button className="shift-nav-btn" onClick={() => setShiftDate(format(addDays(new Date(shiftDate + 'T00:00:00'), 1), 'yyyy-MM-dd'))}>
-                    &rarr;
-                  </button>
-                </div>
-              </div>
-
-              <div className="shift-date-label">
-                {format(new Date(shiftDate + 'T00:00:00'), 'EEEE, MMMM dd, yyyy')}
-                {shiftData?.shift && (
-                  <span className={`shift-badge ${shiftData.shift.is_night_shift ? 'night' : 'day'}`}>
-                    {shiftData.shift.label}
-                  </span>
-                )}
-                {shiftData?.shift?.working_hours_start && (
-                  <span className="shift-time-range">
-                    {shiftData.shift.working_hours_start} &ndash; {shiftData.shift.working_hours_end}
-                  </span>
-                )}
-              </div>
-
-              {shiftLoading ? (
-                <div className="shift-loading">Loading shift data...</div>
-              ) : shiftData?.summary?.session_count > 0 || shiftData?.summary?.activity_count > 0 ? (
-                <>
-                  <div className="shift-stats-grid">
-                    <div className="shift-stat">
-                      <div className="shift-stat-label">Login</div>
-                      <div className="shift-stat-value">
-                        {shiftData.summary.first_login
-                          ? format(new Date(shiftData.summary.first_login), 'hh:mm a')
-                          : '--'}
-                      </div>
-                    </div>
-                    <div className="shift-stat">
-                      <div className="shift-stat-label">Logout</div>
-                      <div className="shift-stat-value">
-                        {shiftData.summary.is_active
-                          ? 'Active'
-                          : shiftData.summary.last_logout
-                            ? format(new Date(shiftData.summary.last_logout), 'hh:mm a')
-                            : '--'}
-                      </div>
-                    </div>
-                    <div className="shift-stat">
-                      <div className="shift-stat-label">Total Hours</div>
-                      <div className="shift-stat-value">{formatDuration(shiftData.summary.total_seconds)}</div>
-                    </div>
-                    <div className="shift-stat">
-                      <div className="shift-stat-label">Active Time</div>
-                      <div className="shift-stat-value active">{formatDuration(shiftData.summary.active_seconds)}</div>
-                    </div>
-                    <div className="shift-stat">
-                      <div className="shift-stat-label">Idle Time</div>
-                      <div className="shift-stat-value idle">{formatDuration(shiftData.summary.idle_seconds)}</div>
-                    </div>
-                  </div>
-
-                  {shiftData.sessions.length > 1 && (
-                    <div className="shift-sessions">
-                      <h4>Sessions ({shiftData.sessions.length})</h4>
-                      <div className={shiftData.sessions.length > 4 ? 'shift-sessions-scroll' : ''}>
-                      <table className="breakdown-table">
-                        <thead>
-                          <tr>
-                            <th>#</th>
-                            <th>Login</th>
-                            <th>Logout</th>
-                            <th>Duration</th>
-                            <th>Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {shiftData.sessions.map((s, i) => (
-                            <tr key={s.id}>
-                              <td>{i + 1}</td>
-                              <td>{format(new Date(s.start_time), 'hh:mm a')}</td>
-                              <td>{s.end_time ? format(new Date(s.end_time), 'hh:mm a') : 'Active'}</td>
-                              <td>{formatDuration(s.duration_seconds)}</td>
-                              <td>
-                                <span className={`shift-status ${s.effective_status}`}>
-                                  {s.effective_status.replace('_', ' ')}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      </div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="shift-empty">No attendance recorded for this shift</div>
-              )}
-
-              {/* Activity Log Toggle */}
-              <div className="activity-log-toggle" onClick={() => {
-                setShowActivityLog(!showActivityLog);
-                if (!showActivityLog && activityLog.length === 0) fetchActivityLog();
-              }}>
-                <span>Activity Log {activityLog.length > 0 ? `(${activityLog.length})` : ''}</span>
-                <span className="toggle-arrow">{showActivityLog ? '\u25B2' : '\u25BC'}</span>
-              </div>
-
-              {showActivityLog && (
-                <div className="activity-log-section">
-                  {activityLogLoading ? (
-                    <div className="shift-loading">Loading activity log...</div>
-                  ) : activityLog.length > 0 ? (
-                    <div className="activity-log-scroll">
-                      <table className="breakdown-table activity-log-table">
-                        <thead>
-                          <tr>
-                            <th>Time</th>
-                            <th>Application</th>
-                            <th>Details</th>
-                            <th>Keys</th>
-                            <th>Duration</th>
-                            <th>Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {activityLog.map((entry, i) => {
-                            const detail = getActivityDetail(entry);
-                            const metadata = typeof entry.metadata === 'string' ? JSON.parse(entry.metadata || '{}') : (entry.metadata || {});
-                            return (
-                              <tr key={entry.id || i} className={entry.is_idle ? 'idle-row' : ''}>
-                                <td className="log-time">{format(new Date(entry.timestamp), 'hh:mm:ss a')}</td>
-                                <td className="log-app">
-                                  <span className="app-name">{entry.application_name || '--'}</span>
-                                </td>
-                                <td className="log-detail">
-                                  {detail.type === 'url' && (
-                                    <span className="detail-url" title={detail.value}>{detail.domain || detail.value}</span>
-                                  )}
-                                  {detail.type === 'file' && (
-                                    <span className="detail-file" title={detail.value}>{detail.value}</span>
-                                  )}
-                                  {detail.type === 'window' && (
-                                    <span className="detail-window" title={detail.value}>
-                                      {detail.value.length > 50 ? detail.value.substring(0, 50) + '...' : detail.value}
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="log-keys">
-                                  {entry.keyboard_events > 0 && (
-                                    <span className={metadata.maxKeyRepeat > 15 ? 'key-spam' : ''}>
-                                      {entry.keyboard_events}
-                                      {metadata.maxKeyRepeat > 5 && (
-                                        <span className="repeat-badge" title={`Max ${metadata.maxKeyRepeat}x same key`}>
-                                          R{metadata.maxKeyRepeat}
-                                        </span>
-                                      )}
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="log-duration">{entry.duration_seconds ? `${entry.duration_seconds}s` : '--'}</td>
-                                <td>
-                                  <span className={`shift-status ${entry.is_idle ? 'idle' : 'active'}`}>
-                                    {entry.is_idle ? 'idle' : 'active'}
-                                  </span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="shift-empty">No activity logs for this shift</div>
-                  )}
-                </div>
-              )}
-            </div>
-
             {/* Filters & Actions */}
             <div className="filters-bar">
               <div className="filter-group">

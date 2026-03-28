@@ -8,6 +8,7 @@ import Users from './components/Users';
 import Analytics from './components/Analytics';
 import UserActivity from './components/UserActivity';
 import Teams from './components/Teams';
+import AttendanceLogs from './components/AttendanceLogs';
 import Profile from './components/Profile';
 import './App.css';
 
@@ -123,6 +124,14 @@ function App() {
               isAuthenticated && user?.role === 'admin' ?
               <Users user={user} onLogout={handleLogout} /> :
               <Navigate to="/dashboard" />
+            }
+          />
+          <Route
+            path="/attendance-logs"
+            element={
+              isAuthenticated ?
+              <AttendanceLogs user={user} onLogout={handleLogout} /> :
+              <Navigate to="/login" />
             }
           />
           <Route
