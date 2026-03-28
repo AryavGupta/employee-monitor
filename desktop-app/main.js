@@ -102,6 +102,10 @@ let keyboardMonitorProcess = null;
 let pendingKeystrokes = 0;
 let pendingMaxRepeat = 0;
 
+// Tracking script paths (written to temp on startup to avoid PowerShell escaping issues)
+let activeWindowScriptPath = null;
+let browserUrlScriptPath = null;
+
 // Sleep/wake tracking - prevents uptime inflation during system sleep
 let isSuspended = false;
 let suspendTime = null;
@@ -258,6 +262,9 @@ function updateTrayMenu() {
 app.on('ready', async () => {
   console.log('Starting Employee Monitor...');
   console.log('API URL:', CONFIG.API_URL);
+
+  // Initialize PowerShell tracking scripts (must be before any tracking starts)
+  initTrackingScripts();
 
   createWindow();
 
@@ -575,6 +582,8 @@ app.on('before-quit', async () => {
       console.log('Cleanup on quit failed:', e.message);
     }
   }
+  stopKeyboardMonitor();
+  cleanupTrackingScripts();
 });
 
 app.on('activate', () => {
@@ -986,32 +995,12 @@ async function getWindowsEdgeChromeUrl(appName) {
       return;
     }
 
-    // PowerShell script to get URL from Chrome/Edge address bar using UI Automation
-    // SECURITY: safeProcessName is guaranteed to be from whitelist (no user input)
-    const psScript = `
-      Add-Type -AssemblyName UIAutomationClient
-      Add-Type -AssemblyName UIAutomationTypes
+    if (!browserUrlScriptPath) {
+      resolve(null);
+      return;
+    }
 
-      $processName = "${safeProcessName}"
-      $procs = Get-Process -Name $processName -ErrorAction SilentlyContinue
-
-      if ($procs) {
-        $proc = $procs | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-        if ($proc) {
-          $root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
-          $condition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
-          $addressBar = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
-          if ($addressBar) {
-            $valuePattern = $addressBar.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-            if ($valuePattern) {
-              Write-Output $valuePattern.Current.Value
-            }
-          }
-        }
-      }
-    `;
-
-    exec(`powershell -Command "${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, { timeout: 5000 }, (error, stdout) => {
+    exec(`powershell -ExecutionPolicy Bypass -File "${browserUrlScriptPath}" -ProcessName "${safeProcessName}"`, { timeout: 5000 }, (error, stdout) => {
       if (error || !stdout.trim()) {
         resolve(null);
         return;
@@ -1212,58 +1201,103 @@ async function stopScreenshotCapture() {
 }
 
 // =====================================================
-// Active Application Tracking (PRESERVED + Enhanced)
+// Active Application Tracking (File-based PowerShell)
 // =====================================================
+
+// Initialize PowerShell tracking scripts on disk (avoids escaping issues with -Command)
+function initTrackingScripts() {
+  if (os.platform() !== 'win32') return;
+
+  const tempDir = os.tmpdir();
+
+  // Active window detection script
+  activeWindowScriptPath = path.join(tempDir, `em-activewin-${process.pid}.ps1`);
+  fs.writeFileSync(activeWindowScriptPath, `
+Add-Type -MemberDefinition '
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+' -Name 'WinAPI' -Namespace 'User32' -ErrorAction SilentlyContinue
+
+$hwnd = [User32.WinAPI]::GetForegroundWindow()
+$title = New-Object System.Text.StringBuilder 256
+[User32.WinAPI]::GetWindowText($hwnd, $title, 256) | Out-Null
+$processId = [uint32]0
+[User32.WinAPI]::GetWindowThreadProcessId($hwnd, [ref]$processId) | Out-Null
+$process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+$pName = if ($process) { $process.ProcessName } else { "Unknown" }
+
+$filePath = ""
+if ($pName -eq "explorer" -and $hwnd -ne [IntPtr]::Zero) {
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        foreach ($w in $shell.Windows()) {
+            if ($w.HWND -eq [long]$hwnd) {
+                $filePath = $w.Document.Folder.Self.Path
+                break
+            }
+        }
+    } catch {}
+}
+
+@{
+    Title = $title.ToString()
+    ProcessName = $pName
+    FilePath = $filePath
+} | ConvertTo-Json
+`);
+
+  // Browser URL extraction script
+  browserUrlScriptPath = path.join(tempDir, `em-browserurl-${process.pid}.ps1`);
+  fs.writeFileSync(browserUrlScriptPath, `
+param([string]$ProcessName)
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+
+$procs = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
+if ($procs) {
+    $proc = $procs | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if ($proc) {
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+        $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Edit
+        )
+        $addressBar = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        if ($addressBar) {
+            $valuePattern = $addressBar.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            if ($valuePattern) {
+                Write-Output $valuePattern.Current.Value
+            }
+        }
+    }
+}
+`);
+
+  console.log('Tracking scripts initialized');
+}
+
+function cleanupTrackingScripts() {
+  try { if (activeWindowScriptPath) fs.unlinkSync(activeWindowScriptPath); } catch (e) {}
+  try { if (browserUrlScriptPath) fs.unlinkSync(browserUrlScriptPath); } catch (e) {}
+}
 
 async function trackActiveApplication() {
   return new Promise((resolve) => {
     const platform = os.platform();
 
     if (platform === 'win32') {
-      // Windows: Use PowerShell to get active window info
-      const psScript = `
-        Add-Type @"
-          using System;
-          using System.Runtime.InteropServices;
-          using System.Text;
-          public class WindowInfo {
-            [DllImport("user32.dll")]
-            public static extern IntPtr GetForegroundWindow();
-            [DllImport("user32.dll")]
-            public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
-            [DllImport("user32.dll")]
-            public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-          }
-"@
-        $hwnd = [WindowInfo]::GetForegroundWindow()
-        $title = New-Object System.Text.StringBuilder 256
-        [WindowInfo]::GetWindowText($hwnd, $title, 256) | Out-Null
-        $processId = 0
-        [WindowInfo]::GetWindowThreadProcessId($hwnd, [ref]$processId) | Out-Null
-        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
-        $pName = if($process) { $process.ProcessName } else { "Unknown" }
-        $filePath = ""
-        if ($pName -eq "explorer" -and $hwnd -ne [IntPtr]::Zero) {
-          try {
-            $shell = New-Object -ComObject Shell.Application
-            foreach ($w in $shell.Windows()) {
-              if ($w.HWND -eq [long]$hwnd) {
-                $filePath = $w.Document.Folder.Self.Path
-                break
-              }
-            }
-          } catch {}
-        }
-        @{
-          Title = $title.ToString()
-          ProcessName = $pName
-          FilePath = $filePath
-        } | ConvertTo-Json
-      `;
+      if (!activeWindowScriptPath) {
+        resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null });
+        return;
+      }
 
-      exec(`powershell -Command "${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, (error, stdout) => {
+      exec(`powershell -ExecutionPolicy Bypass -File "${activeWindowScriptPath}"`, { timeout: 5000 }, (error, stdout) => {
         if (error) {
-          resolve({ appName: 'Unknown', windowTitle: 'Unknown' });
+          resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null });
           return;
         }
         try {
