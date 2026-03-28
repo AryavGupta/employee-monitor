@@ -474,54 +474,6 @@ function Analytics({ user, onLogout }) {
           </div>
         ) : (
           <>
-            {/* Filters & Actions */}
-            <div className="filters-bar">
-              <div className="filter-group">
-                <label>Date Range</label>
-                <div className="date-inputs">
-                  <input
-                    type="date"
-                    value={dateRange.startDate}
-                    onChange={(e) => setDateRange(prev => ({ ...prev, startDate: e.target.value }))}
-                  />
-                  <span>to</span>
-                  <input
-                    type="date"
-                    value={dateRange.endDate}
-                    onChange={(e) => setDateRange(prev => ({ ...prev, endDate: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              <div className="filter-group">
-                <label>Hours</label>
-                <select
-                  value={overtimeFilter}
-                  onChange={(e) => setOvertimeFilter(e.target.value)}
-                  className="overtime-filter"
-                >
-                  <option value="all">All Hours</option>
-                  <option value="regular">Regular Only</option>
-                  <option value="overtime">Overtime Only</option>
-                </select>
-              </div>
-
-              <div className="action-buttons">
-                <button className="refresh-btn" onClick={fetchAnalytics} disabled={loading}>
-                  <Icons.Refresh />
-                  {loading ? 'Loading...' : 'Refresh'}
-                </button>
-                <button className="download-btn" onClick={downloadReport} disabled={!summary}>
-                  <Icons.Download />
-                  PDF Report
-                </button>
-                <button className="download-btn secondary" onClick={downloadCSV} disabled={!productivityData.length}>
-                  <Icons.Download />
-                  CSV Export
-                </button>
-              </div>
-            </div>
-
             {/* Shift Attendance Section */}
             <div className="shift-attendance">
               <div className="shift-header">
@@ -590,6 +542,7 @@ function Analytics({ user, onLogout }) {
                   {shiftData.sessions.length > 1 && (
                     <div className="shift-sessions">
                       <h4>Sessions ({shiftData.sessions.length})</h4>
+                      <div className={shiftData.sessions.length > 4 ? 'shift-sessions-scroll' : ''}>
                       <table className="breakdown-table">
                         <thead>
                           <tr>
@@ -616,12 +569,61 @@ function Analytics({ user, onLogout }) {
                           ))}
                         </tbody>
                       </table>
+                      </div>
                     </div>
                   )}
                 </>
               ) : (
                 <div className="shift-empty">No attendance recorded for this shift</div>
               )}
+            </div>
+
+            {/* Filters & Actions */}
+            <div className="filters-bar">
+              <div className="filter-group">
+                <label>Date Range</label>
+                <div className="date-inputs">
+                  <input
+                    type="date"
+                    value={dateRange.startDate}
+                    onChange={(e) => setDateRange(prev => ({ ...prev, startDate: e.target.value }))}
+                  />
+                  <span>to</span>
+                  <input
+                    type="date"
+                    value={dateRange.endDate}
+                    onChange={(e) => setDateRange(prev => ({ ...prev, endDate: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="filter-group">
+                <label>Hours</label>
+                <select
+                  value={overtimeFilter}
+                  onChange={(e) => setOvertimeFilter(e.target.value)}
+                  className="overtime-filter"
+                >
+                  <option value="all">All Hours</option>
+                  <option value="regular">Regular Only</option>
+                  <option value="overtime">Overtime Only</option>
+                </select>
+              </div>
+
+              <div className="action-buttons">
+                <button className="refresh-btn" onClick={fetchAnalytics} disabled={loading}>
+                  <Icons.Refresh />
+                  {loading ? 'Loading...' : 'Refresh'}
+                </button>
+                <button className="download-btn" onClick={downloadReport} disabled={!summary}>
+                  <Icons.Download />
+                  PDF Report
+                </button>
+                <button className="download-btn secondary" onClick={downloadCSV} disabled={!productivityData.length}>
+                  <Icons.Download />
+                  CSV Export
+                </button>
+              </div>
             </div>
 
             {loading ? (

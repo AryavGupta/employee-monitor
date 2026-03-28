@@ -707,6 +707,21 @@
   color: #475569;
 }
 
+.shift-sessions-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.shift-sessions-scroll thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.shift-sessions-scroll thead th {
+  background: #f8fafc;
+}
+
 .shift-status {
   display: inline-block;
   padding: 3px 8px;
