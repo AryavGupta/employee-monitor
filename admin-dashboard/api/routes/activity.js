@@ -124,7 +124,7 @@ router.post('/log/batch', authenticateToken, async (req, res) => {
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
-    const { userId, activityType, startDate, endDate, isIdle, limit = 100, offset = 0 } = req.query;
+    const { userId, activityType, startDate, endDate, isIdle, shiftDate, limit = 100, offset = 0 } = req.query;
 
     let query = `
       SELECT a.*, u.email, u.full_name FROM activity_logs a
@@ -181,6 +181,12 @@ router.get('/', authenticateToken, async (req, res) => {
     if (isIdle !== undefined) {
       query += ` AND a.is_idle = $${paramCount}`;
       params.push(isIdle === 'true');
+      paramCount++;
+    }
+
+    if (shiftDate) {
+      query += ` AND a.shift_date = $${paramCount}`;
+      params.push(shiftDate);
       paramCount++;
     }
 

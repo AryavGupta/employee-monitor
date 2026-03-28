@@ -766,6 +766,130 @@
 }
 
 /* ============================================
+   ACTIVITY LOG
+   ============================================ */
+
+.activity-log-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 0;
+  margin-top: 8px;
+  border-top: 1px solid #f1f5f9;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: #475569;
+  transition: color 0.15s ease;
+}
+
+.activity-log-toggle:hover {
+  color: #0f172a;
+}
+
+.toggle-arrow {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.activity-log-section {
+  margin-top: 4px;
+}
+
+.activity-log-scroll {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid #f1f5f9;
+  border-radius: 8px;
+}
+
+.activity-log-scroll thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.activity-log-table td {
+  font-size: 13px !important;
+  padding: 10px 14px !important;
+}
+
+.activity-log-table th {
+  font-size: 11px !important;
+  padding: 10px 14px !important;
+}
+
+.idle-row {
+  opacity: 0.5;
+}
+
+.log-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: #64748b !important;
+  font-size: 12px !important;
+}
+
+.log-app .app-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.log-detail {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-url {
+  color: #2563eb;
+}
+
+.detail-url::before {
+  content: '\1F310 ';
+  font-size: 12px;
+}
+
+.detail-file {
+  color: #7c3aed;
+}
+
+.detail-file::before {
+  content: '\1F4C1 ';
+  font-size: 12px;
+}
+
+.detail-window {
+  color: #64748b;
+}
+
+.log-keys {
+  white-space: nowrap;
+}
+
+.key-spam {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.repeat-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 5px;
+  background: #fef2f2;
+  color: #dc2626;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.log-duration {
+  font-variant-numeric: tabular-nums;
+  color: #64748b !important;
+}
+
+/* ============================================
    LOADING & EMPTY STATES
    ============================================ */
 

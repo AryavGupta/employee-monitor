@@ -114,6 +114,11 @@ function Analytics({ user, onLogout }) {
   const [shiftLoading, setShiftLoading] = useState(false);
   const shiftRefreshTimer = useRef(null);
 
+  // Activity log states
+  const [activityLog, setActivityLog] = useState([]);
+  const [activityLogLoading, setActivityLogLoading] = useState(false);
+  const [showActivityLog, setShowActivityLog] = useState(false);
+
   // Fetch users on mount
   useEffect(() => {
     fetchUsers();
@@ -256,13 +261,35 @@ function Analytics({ user, onLogout }) {
     }
   }, [selectedUserId, shiftDate]);
 
+  // Fetch activity log for the shift
+  const fetchActivityLog = useCallback(async () => {
+    if (!selectedUserId || !shiftDate) return;
+    setActivityLogLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const params = new URLSearchParams({ userId: selectedUserId, shiftDate, limit: '500' });
+      const res = await axios.get(`${API_URL}/api/activity?${params}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data.success) {
+        setActivityLog(res.data.data);
+      }
+    } catch (error) {
+      console.error('Error fetching activity log:', error);
+    } finally {
+      setActivityLogLoading(false);
+    }
+  }, [selectedUserId, shiftDate]);
+
   useEffect(() => {
     if (selectedUserId) {
       fetchShiftAttendance();
+      if (showActivityLog) fetchActivityLog();
     } else {
       setShiftData(null);
+      setActivityLog([]);
     }
-  }, [selectedUserId, shiftDate, fetchShiftAttendance]);
+  }, [selectedUserId, shiftDate, fetchShiftAttendance, fetchActivityLog, showActivityLog]);
 
   // Auto-refresh shift data every 30s if there's an active session
   useEffect(() => {
@@ -284,6 +311,20 @@ function Analytics({ user, onLogout }) {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     return `${hours}h ${minutes}m`;
+  };
+
+  // Get display detail for an activity entry (URL, file path, or window title)
+  const getActivityDetail = (entry) => {
+    if (entry.url) {
+      if (entry.url.startsWith('file:///')) {
+        return { type: 'file', value: decodeURIComponent(entry.url.replace('file:///', '')) };
+      }
+      return { type: 'url', value: entry.url, domain: entry.domain };
+    }
+    if (entry.window_title && entry.window_title !== 'Unknown') {
+      return { type: 'window', value: entry.window_title };
+    }
+    return { type: 'none', value: '' };
   };
 
   // Format decimal hours to "Xh Ym" format (e.g., 0.033 hours -> "0h 2m")
@@ -575,6 +616,85 @@ function Analytics({ user, onLogout }) {
                 </>
               ) : (
                 <div className="shift-empty">No attendance recorded for this shift</div>
+              )}
+
+              {/* Activity Log Toggle */}
+              <div className="activity-log-toggle" onClick={() => {
+                setShowActivityLog(!showActivityLog);
+                if (!showActivityLog && activityLog.length === 0) fetchActivityLog();
+              }}>
+                <span>Activity Log {activityLog.length > 0 ? `(${activityLog.length})` : ''}</span>
+                <span className="toggle-arrow">{showActivityLog ? '\u25B2' : '\u25BC'}</span>
+              </div>
+
+              {showActivityLog && (
+                <div className="activity-log-section">
+                  {activityLogLoading ? (
+                    <div className="shift-loading">Loading activity log...</div>
+                  ) : activityLog.length > 0 ? (
+                    <div className="activity-log-scroll">
+                      <table className="breakdown-table activity-log-table">
+                        <thead>
+                          <tr>
+                            <th>Time</th>
+                            <th>Application</th>
+                            <th>Details</th>
+                            <th>Keys</th>
+                            <th>Duration</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activityLog.map((entry, i) => {
+                            const detail = getActivityDetail(entry);
+                            const metadata = typeof entry.metadata === 'string' ? JSON.parse(entry.metadata || '{}') : (entry.metadata || {});
+                            return (
+                              <tr key={entry.id || i} className={entry.is_idle ? 'idle-row' : ''}>
+                                <td className="log-time">{format(new Date(entry.timestamp), 'hh:mm:ss a')}</td>
+                                <td className="log-app">
+                                  <span className="app-name">{entry.application_name || '--'}</span>
+                                </td>
+                                <td className="log-detail">
+                                  {detail.type === 'url' && (
+                                    <span className="detail-url" title={detail.value}>{detail.domain || detail.value}</span>
+                                  )}
+                                  {detail.type === 'file' && (
+                                    <span className="detail-file" title={detail.value}>{detail.value}</span>
+                                  )}
+                                  {detail.type === 'window' && (
+                                    <span className="detail-window" title={detail.value}>
+                                      {detail.value.length > 50 ? detail.value.substring(0, 50) + '...' : detail.value}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="log-keys">
+                                  {entry.keyboard_events > 0 && (
+                                    <span className={metadata.maxKeyRepeat > 15 ? 'key-spam' : ''}>
+                                      {entry.keyboard_events}
+                                      {metadata.maxKeyRepeat > 5 && (
+                                        <span className="repeat-badge" title={`Max ${metadata.maxKeyRepeat}x same key`}>
+                                          R{metadata.maxKeyRepeat}
+                                        </span>
+                                      )}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="log-duration">{entry.duration_seconds ? `${entry.duration_seconds}s` : '--'}</td>
+                                <td>
+                                  <span className={`shift-status ${entry.is_idle ? 'idle' : 'active'}`}>
+                                    {entry.is_idle ? 'idle' : 'active'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="shift-empty">No activity logs for this shift</div>
+                  )}
+                </div>
               )}
             </div>
 

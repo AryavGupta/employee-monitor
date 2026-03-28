@@ -3,7 +3,7 @@ const path = require('path');
 const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 
 // Load environment variables from .env file if exists
 try {
@@ -96,6 +96,11 @@ let mouseEvents = 0;
 let lastMousePosition = { x: 0, y: 0 };
 let lastIdleTime = 0;
 let activitySampleCount = 0;
+
+// Real keyboard monitoring (Windows low-level hook)
+let keyboardMonitorProcess = null;
+let pendingKeystrokes = 0;
+let pendingMaxRepeat = 0;
 
 // Sleep/wake tracking - prevents uptime inflation during system sleep
 let isSuspended = false;
@@ -1236,9 +1241,23 @@ async function trackActiveApplication() {
         $processId = 0
         [WindowInfo]::GetWindowThreadProcessId($hwnd, [ref]$processId) | Out-Null
         $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+        $pName = if($process) { $process.ProcessName } else { "Unknown" }
+        $filePath = ""
+        if ($pName -eq "explorer" -and $hwnd -ne [IntPtr]::Zero) {
+          try {
+            $shell = New-Object -ComObject Shell.Application
+            foreach ($w in $shell.Windows()) {
+              if ($w.HWND -eq [long]$hwnd) {
+                $filePath = $w.Document.Folder.Self.Path
+                break
+              }
+            }
+          } catch {}
+        }
         @{
           Title = $title.ToString()
-          ProcessName = if($process) { $process.ProcessName } else { "Unknown" }
+          ProcessName = $pName
+          FilePath = $filePath
         } | ConvertTo-Json
       `;
 
@@ -1251,10 +1270,11 @@ async function trackActiveApplication() {
           const result = JSON.parse(stdout);
           resolve({
             appName: result.ProcessName || 'Unknown',
-            windowTitle: result.Title || 'Unknown'
+            windowTitle: result.Title || 'Unknown',
+            filePath: result.FilePath || null
           });
         } catch (e) {
-          resolve({ appName: 'Unknown', windowTitle: 'Unknown' });
+          resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null });
         }
       });
     } else if (platform === 'darwin') {
@@ -1365,6 +1385,129 @@ function trackKeyboardActivity() {
 }
 
 // =====================================================
+// Real Keyboard Monitoring (Windows Low-Level Hook)
+// =====================================================
+
+function startKeyboardMonitor() {
+  if (os.platform() !== 'win32' || keyboardMonitorProcess) return;
+
+  try {
+    const scriptPath = path.join(os.tmpdir(), `em-kb-${process.pid}.ps1`);
+    const scriptContent = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Diagnostics;
+public class KBMon {
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern IntPtr SetWindowsHookEx(int idHook, LLKBProc lpfn, IntPtr hMod, uint dwThreadId);
+    [DllImport("user32.dll")]
+    static extern bool UnhookWindowsHookEx(IntPtr hhk);
+    [DllImport("user32.dll")]
+    static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll")]
+    static extern IntPtr GetModuleHandle(string lpModuleName);
+    [DllImport("user32.dll")]
+    static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+    [StructLayout(LayoutKind.Sequential)]
+    struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam; public uint time; public int x; public int y; }
+    delegate IntPtr LLKBProc(int nCode, IntPtr wParam, IntPtr lParam);
+    static int keys = 0;
+    static int lastVK = -1;
+    static int rep = 0;
+    static int maxRep = 0;
+    static LLKBProc cbDelegate;
+    static IntPtr hookId;
+    public static void Run() {
+        cbDelegate = HookCB;
+        hookId = SetWindowsHookEx(13, cbDelegate, GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName), 0);
+        if (hookId == IntPtr.Zero) { Console.WriteLine("HOOK_FAILED"); Console.Out.Flush(); return; }
+        var timer = new Timer(_ => {
+            int k = Interlocked.Exchange(ref keys, 0);
+            int r = Interlocked.Exchange(ref maxRep, 0);
+            Console.WriteLine(k + "|" + r);
+            Console.Out.Flush();
+        }, null, 1000, 1000);
+        MSG msg;
+        while (GetMessage(out msg, IntPtr.Zero, 0, 0) != 0) {}
+        UnhookWindowsHookEx(hookId);
+        timer.Dispose();
+    }
+    static IntPtr HookCB(int nCode, IntPtr wParam, IntPtr lParam) {
+        if (nCode >= 0 && (int)wParam == 256) {
+            int vk = Marshal.ReadInt32(lParam);
+            Interlocked.Increment(ref keys);
+            if (vk == lastVK) { rep++; if (rep > maxRep) maxRep = rep; }
+            else { rep = 1; lastVK = vk; }
+        }
+        return CallNextHookEx(hookId, nCode, wParam, lParam);
+    }
+}
+"@ -Language CSharp
+[KBMon]::Run()
+`;
+    fs.writeFileSync(scriptPath, scriptContent);
+
+    keyboardMonitorProcess = spawn('powershell', [
+      '-ExecutionPolicy', 'Bypass',
+      '-WindowStyle', 'Hidden',
+      '-File', scriptPath
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+
+    keyboardMonitorProcess.stdout.on('data', (data) => {
+      for (const line of data.toString().trim().split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed === 'HOOK_FAILED') {
+          console.warn('Keyboard hook failed, falling back to inference');
+          stopKeyboardMonitor();
+          return;
+        }
+        const parts = trimmed.split('|');
+        const k = parseInt(parts[0]);
+        const r = parseInt(parts[1]);
+        if (!isNaN(k)) pendingKeystrokes += k;
+        if (!isNaN(r) && r > pendingMaxRepeat) pendingMaxRepeat = r;
+      }
+    });
+
+    keyboardMonitorProcess.on('error', (err) => {
+      console.error('Keyboard monitor process error:', err);
+      keyboardMonitorProcess = null;
+    });
+
+    keyboardMonitorProcess.on('exit', () => {
+      keyboardMonitorProcess = null;
+    });
+
+    console.log('Keyboard monitor started (low-level hook)');
+  } catch (err) {
+    console.error('Failed to start keyboard monitor:', err);
+  }
+}
+
+function readKeyboardStats() {
+  const result = { keystrokes: pendingKeystrokes, maxRepeat: pendingMaxRepeat };
+  pendingKeystrokes = 0;
+  pendingMaxRepeat = 0;
+  return result;
+}
+
+function stopKeyboardMonitor() {
+  if (keyboardMonitorProcess) {
+    try { keyboardMonitorProcess.kill(); } catch (e) {}
+    keyboardMonitorProcess = null;
+  }
+  pendingKeystrokes = 0;
+  pendingMaxRepeat = 0;
+  // Clean up script file
+  try {
+    fs.unlinkSync(path.join(os.tmpdir(), `em-kb-${process.pid}.ps1`));
+  } catch (e) {}
+  console.log('Keyboard monitor stopped');
+}
+
+// =====================================================
 // Idle Detection (PRESERVED)
 // =====================================================
 
@@ -1389,17 +1532,27 @@ async function trackActivity() {
     // Get active application info
     const appInfo = await trackActiveApplication();
 
-    // Track keyboard activity (inferred from idle time changes)
-    trackKeyboardActivity();
+    // Track keyboard activity - use real monitor if available, else infer
+    let kbData = null;
+    if (keyboardMonitorProcess) {
+      kbData = readKeyboardStats();
+      keyboardEvents = kbData.keystrokes;
+    } else {
+      trackKeyboardActivity();
+    }
 
     // Track mouse movement
     const mouseDistance = trackMouseMovement();
 
-    // Try to extract URL if it's a browser
+    // Try to extract URL/file path
     let currentUrl = null;
     let currentDomain = null;
 
-    if (teamSettings?.track_urls !== false) {
+    // For Explorer windows, capture the directory path
+    if (appInfo.filePath) {
+      currentUrl = 'file:///' + appInfo.filePath.replace(/\\/g, '/');
+      currentDomain = 'local';
+    } else if (teamSettings?.track_urls !== false) {
       currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle);
       if (currentUrl) {
         currentDomain = extractDomain(currentUrl);
@@ -1445,7 +1598,8 @@ async function trackActivity() {
       shiftDate: shiftDate,
       metadata: {
         idleTime: idleTime,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        maxKeyRepeat: kbData?.maxRepeat || 0
       }
     };
 
@@ -1663,6 +1817,9 @@ function startActivityTracking() {
   lastActivityTime = Date.now();
   lastMousePosition = screen.getCursorScreenPoint();
 
+  // Start real keyboard monitoring (Windows only)
+  startKeyboardMonitor();
+
   // Track activity at configured interval
   activityInterval = setInterval(trackActivity, CONFIG.ACTIVITY_INTERVAL);
 
@@ -1675,6 +1832,9 @@ async function stopActivityTracking() {
     clearInterval(activityInterval);
     activityInterval = null;
   }
+
+  // Stop keyboard monitor
+  stopKeyboardMonitor();
 
   // Send any remaining logs and wait for completion
   try {
