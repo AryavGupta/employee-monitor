@@ -114,25 +114,24 @@ function AttendanceLogs({ user, onLogout }) {
     }
   }, [selectedUserId, logFilters]);
 
-  // Fetch on user or shift date change
+  // Fetch shift attendance on user or shift date change (independent from logs)
   useEffect(() => {
     if (selectedUserId) {
       fetchShiftAttendance();
-      setLogOffset(0);
-      fetchActivityLogs(0);
     } else {
       setShiftData(null);
-      setActivityLog([]);
     }
   }, [selectedUserId, fetchShiftAttendance]);
 
-  // Fetch logs when filters change (but not on initial mount with user)
+  // Fetch logs on user selection or filter change (independent from shift)
   useEffect(() => {
     if (selectedUserId) {
       setLogOffset(0);
       fetchActivityLogs(0);
+    } else {
+      setActivityLog([]);
     }
-  }, [logFilters, fetchActivityLogs]);
+  }, [selectedUserId, logFilters, fetchActivityLogs]);
 
   const selectUser = (u) => {
     setSelectedUserId(u.id);
@@ -240,6 +239,7 @@ function AttendanceLogs({ user, onLogout }) {
                   <button className="al-nav-btn" onClick={() => setShiftDate(format(addDays(new Date(shiftDate + 'T00:00:00'), -1), 'yyyy-MM-dd'))}>
                     &larr;
                   </button>
+                  <input type="date" value={shiftDate} onChange={(e) => setShiftDate(e.target.value)} className="al-shift-date-input" />
                   <button className="al-nav-btn" onClick={() => setShiftDate(format(addDays(new Date(shiftDate + 'T00:00:00'), 1), 'yyyy-MM-dd'))}>
                     &rarr;
                   </button>

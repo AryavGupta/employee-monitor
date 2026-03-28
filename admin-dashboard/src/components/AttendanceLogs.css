@@ -127,6 +127,20 @@
 
 .al-nav-btn:hover { background: white; border-color: #cbd5e1; color: #0f172a; }
 
+.al-shift-date-input {
+  padding: 6px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 13px;
+  background: #f8fafc;
+  color: #0f172a;
+  height: 34px;
+  box-sizing: border-box;
+  transition: all 0.2s ease;
+}
+
+.al-shift-date-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1); }
+
 .al-shift-date {
   display: flex;
   align-items: center;
