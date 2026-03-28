@@ -530,18 +530,6 @@ function Analytics({ user, onLogout }) {
                   <button className="shift-nav-btn" onClick={() => setShiftDate(format(addDays(new Date(shiftDate + 'T00:00:00'), -1), 'yyyy-MM-dd'))}>
                     &larr;
                   </button>
-                  <button
-                    className={`shift-quick-btn ${shiftDate === format(new Date(), 'yyyy-MM-dd') ? 'active' : ''}`}
-                    onClick={() => setShiftDate(format(new Date(), 'yyyy-MM-dd'))}
-                  >
-                    Today
-                  </button>
-                  <button
-                    className={`shift-quick-btn ${shiftDate === format(subDays(new Date(), 1), 'yyyy-MM-dd') ? 'active' : ''}`}
-                    onClick={() => setShiftDate(format(subDays(new Date(), 1), 'yyyy-MM-dd'))}
-                  >
-                    Yesterday
-                  </button>
                   <button className="shift-nav-btn" onClick={() => setShiftDate(format(addDays(new Date(shiftDate + 'T00:00:00'), 1), 'yyyy-MM-dd'))}>
                     &rarr;
                   </button>
