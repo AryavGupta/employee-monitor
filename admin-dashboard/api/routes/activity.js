@@ -48,7 +48,7 @@ router.post('/log/batch', authenticateToken, async (req, res) => {
       let paramIndex = 1;
 
       for (const activity of activities) {
-        placeholders.push(`($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}, $${paramIndex + 4}, $${paramIndex + 5}, $${paramIndex + 6}, $${paramIndex + 7}, $${paramIndex + 8}, $${paramIndex + 9}, $${paramIndex + 10}, $${paramIndex + 11}, $${paramIndex + 12})`);
+        placeholders.push(`($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}, $${paramIndex + 4}, $${paramIndex + 5}, $${paramIndex + 6}, $${paramIndex + 7}, $${paramIndex + 8}, $${paramIndex + 9}, $${paramIndex + 10}, $${paramIndex + 11}, $${paramIndex + 12}, $${paramIndex + 13})`);
         values.push(
           userId,
           activity.activityType,
@@ -62,14 +62,15 @@ router.post('/log/batch', authenticateToken, async (req, res) => {
           activity.url || null,
           activity.domain || null,
           activity.isOvertime ?? false,
-          activity.shiftDate || null
+          activity.shiftDate || null,
+          activity.metadata ? JSON.stringify(activity.metadata) : null
         );
-        paramIndex += 13;
+        paramIndex += 14;
       }
 
       const query = `
         INSERT INTO activity_logs
-          (user_id, activity_type, application_name, window_title, is_idle, duration_seconds, keyboard_events, mouse_events, mouse_distance, url, domain, is_overtime, shift_date)
+          (user_id, activity_type, application_name, window_title, is_idle, duration_seconds, keyboard_events, mouse_events, mouse_distance, url, domain, is_overtime, shift_date, metadata)
         VALUES ${placeholders.join(', ')}
       `;
 
@@ -124,7 +125,7 @@ router.post('/log/batch', authenticateToken, async (req, res) => {
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
-    const { userId, activityType, startDate, endDate, isIdle, shiftDate, limit = 100, offset = 0 } = req.query;
+    const { userId, activityType, startDate, endDate, isIdle, shiftDate, sort = 'desc', limit = 100, offset = 0 } = req.query;
 
     let query = `
       SELECT a.*, u.email, u.full_name FROM activity_logs a
@@ -190,7 +191,8 @@ router.get('/', authenticateToken, async (req, res) => {
       paramCount++;
     }
 
-    query += ` ORDER BY a.timestamp DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    const sortDir = sort === 'asc' ? 'ASC' : 'DESC';
+    query += ` ORDER BY a.timestamp ${sortDir} LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     params.push(parseInt(limit), parseInt(offset));
 
     const result = await pool.query(query, params);

@@ -267,7 +267,7 @@ function Analytics({ user, onLogout }) {
     setActivityLogLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const params = new URLSearchParams({ userId: selectedUserId, shiftDate, limit: '500' });
+      const params = new URLSearchParams({ userId: selectedUserId, shiftDate, sort: 'asc', limit: '500' });
       const res = await axios.get(`${API_URL}/api/activity?${params}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
