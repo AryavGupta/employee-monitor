@@ -701,7 +701,7 @@ router.get('/shift-attendance/export', authenticateToken, async (req, res) => {
 
       // Get sessions
       const sessionsResult = await pool.query(
-        `SELECT s.start_time, s.end_time, s.duration_seconds, s.active_seconds, s.idle_seconds, s.is_active,
+        `SELECT s.start_time, s.end_time, s.duration_seconds, s.is_active,
                 p.last_heartbeat
          FROM sessions s
          LEFT JOIN user_presence p ON s.user_id = p.user_id
@@ -710,23 +710,39 @@ router.get('/shift-attendance/export', authenticateToken, async (req, res) => {
         [uid, shift_start_utc, shift_end_utc]
       );
 
-      // Also get activity summary for idle/active breakdown
-      const activityResult = await pool.query(
-        `SELECT COALESCE(SUM(CASE WHEN is_idle = false THEN duration_seconds ELSE 0 END), 0) as active_secs,
-                COALESCE(SUM(CASE WHEN is_idle = true THEN duration_seconds ELSE 0 END), 0) as idle_secs
-         FROM activity_logs WHERE user_id = $1 AND shift_date = $2`,
-        [uid, shiftDate]
-      );
-      const actSummary = activityResult.rows[0];
-
       if (sessionsResult.rows.length === 0) continue;
 
+      // Get all activity logs for this shift to compute per-session idle/active from actual data
+      const activityResult = await pool.query(
+        `SELECT timestamp, duration_seconds, is_idle
+         FROM activity_logs
+         WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3
+         ORDER BY timestamp ASC`,
+        [uid, shift_start_utc, shift_end_utc]
+      );
+      const activities = activityResult.rows;
+
       for (const s of sessionsResult.rows) {
-        const totalSecs = parseInt(s.duration_seconds) || 0;
-        // Per-session idle/active: proportionally distribute from activity summary if session-level not available
-        const sessionActive = parseInt(s.active_seconds) || 0;
-        const sessionIdle = parseInt(s.idle_seconds) || 0;
-        const workingHours = Math.max(totalSecs - sessionIdle, 0);
+        const sessionStart = new Date(s.start_time).getTime();
+        const sessionEnd = s.end_time ? new Date(s.end_time).getTime() : Date.now();
+        const totalSecs = parseInt(s.duration_seconds) || Math.round((sessionEnd - sessionStart) / 1000);
+
+        // Sum activity logs that fall within this session's time range
+        let activeSeconds = 0;
+        let idleSeconds = 0;
+        for (const a of activities) {
+          const aTime = new Date(a.timestamp).getTime();
+          if (aTime >= sessionStart && aTime < sessionEnd) {
+            const dur = parseInt(a.duration_seconds) || 0;
+            if (a.is_idle) {
+              idleSeconds += dur;
+            } else {
+              activeSeconds += dur;
+            }
+          }
+        }
+
+        const workingHours = Math.max(totalSecs - idleSeconds, 0);
 
         rows.push({
           user_name: userInfo.full_name,
@@ -736,8 +752,8 @@ router.get('/shift-attendance/export', authenticateToken, async (req, res) => {
           logout: s.end_time,
           is_active: s.is_active && !s.end_time,
           total_hours: totalSecs,
-          idle_time: sessionIdle,
-          active_time: sessionActive,
+          idle_time: idleSeconds,
+          active_time: activeSeconds,
           working_hours: workingHours
         });
       }
