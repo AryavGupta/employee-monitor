@@ -544,7 +544,41 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
     );
     const { shift_start_utc, shift_end_utc } = boundsResult.rows[0];
 
-    // 3. Query sessions within shift window
+    // 3. Auto-close stale sessions for this user before querying
+    try {
+      await pool.query(
+        `UPDATE sessions SET is_active = false,
+         end_time = COALESCE(
+           GREATEST(
+             (SELECT last_heartbeat FROM user_presence WHERE user_id = sessions.user_id),
+             (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = sessions.user_id AND timestamp >= sessions.start_time),
+             (SELECT MAX(captured_at) FROM screenshots WHERE user_id = sessions.user_id AND captured_at >= sessions.start_time)
+           ),
+           (SELECT last_heartbeat FROM user_presence WHERE user_id = sessions.user_id),
+           CURRENT_TIMESTAMP
+         ),
+         duration_seconds = EXTRACT(EPOCH FROM (
+           COALESCE(
+             GREATEST(
+               (SELECT last_heartbeat FROM user_presence WHERE user_id = sessions.user_id),
+               (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = sessions.user_id AND timestamp >= sessions.start_time),
+               (SELECT MAX(captured_at) FROM screenshots WHERE user_id = sessions.user_id AND captured_at >= sessions.start_time)
+             ),
+             (SELECT last_heartbeat FROM user_presence WHERE user_id = sessions.user_id),
+             CURRENT_TIMESTAMP
+           ) - sessions.start_time
+         ))
+         WHERE user_id = $1 AND is_active = true
+           AND NOT EXISTS (
+             SELECT 1 FROM user_presence WHERE user_id = $1 AND last_heartbeat > NOW() - INTERVAL '5 minutes'
+           )`,
+        [targetUserId]
+      );
+    } catch (cleanupErr) {
+      console.error('Stale session cleanup error:', cleanupErr.message);
+    }
+
+    // Query sessions within shift window
     const sessionsResult = await pool.query(
       `SELECT s.id, s.start_time, s.end_time, s.is_active,
               s.duration_seconds, s.active_seconds, s.idle_seconds,

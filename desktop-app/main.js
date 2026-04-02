@@ -1144,8 +1144,8 @@ async function pauseTrackingNow() {
     screenshotInterval = null;
   }
   stopActivityTracking();
-  stopHeartbeat();
   await endWorkSession();
+  stopHeartbeat();
 
   isTracking = false;
   updateTrayMenu();
@@ -1811,33 +1811,43 @@ async function startWorkSession() {
 async function endWorkSession() {
   if (!currentSessionId) return;
 
-  try {
-    // Send any remaining activity logs
-    await sendActivityBatch();
+  // Send any remaining activity logs
+  await sendActivityBatch();
 
-    const response = await axios.post(
-      `${CONFIG.API_URL}/api/sessions/end`,
-      {
-        totalActiveTime: totalActiveSeconds,
-        totalIdleTime: totalIdleSeconds,
-        notes: `Session ended. Active: ${Math.round(totalActiveSeconds / 60)}min, Idle: ${Math.round(totalIdleSeconds / 60)}min`
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${CONFIG.USER_TOKEN}`,
-          'Content-Type': 'application/json'
+  const maxRetries = 3;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await axios.post(
+        `${CONFIG.API_URL}/api/sessions/end`,
+        {
+          totalActiveTime: totalActiveSeconds,
+          totalIdleTime: totalIdleSeconds,
+          notes: `Session ended. Active: ${Math.round(totalActiveSeconds / 60)}min, Idle: ${Math.round(totalIdleSeconds / 60)}min`
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${CONFIG.USER_TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
         }
+      );
+
+      console.log('Work session ended');
+      currentSessionId = null;
+      return response.data;
+    } catch (error) {
+      console.error(`Error ending work session (attempt ${attempt}/${maxRetries}):`, error.message);
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
-    );
-
-    console.log('Work session ended');
-    currentSessionId = null;
-
-    return response.data;
-  } catch (error) {
-    console.error('Error ending work session:', error.message);
-    return null;
+    }
   }
+
+  // All retries failed — clear local state to avoid stale references
+  console.error('Failed to end session after all retries. Server-side cleanup will handle it.');
+  currentSessionId = null;
+  return null;
 }
 
 // =====================================================

@@ -113,11 +113,15 @@ Key tables:
 
 ## Deployment
 
-**Admin Dashboard:**
+**Admin Dashboard (Vercel):**
 ```bash
 cd admin-dashboard
-vercel --prod
+vercel --prod --yes    # Deploy to production (always use --yes to skip prompts)
 ```
+- Vercel tracks the `main` branch on GitHub
+- Root directory is `admin-dashboard`
+- After pushing changes, always trigger a deploy with `vercel --prod --yes` from the `admin-dashboard` directory
+- Production URL: https://admin-dashboard-vert-iota-16.vercel.app
 
 **Desktop App:**
 ```bash
@@ -356,6 +360,28 @@ Before finalizing any change, verify:
 ### IN PRODUCTION
 
 *No active issues at this time.*
+
+### RESOLVED — April 2026 (CSV Export)
+
+* **CSV export times/dates mismatched dashboard** (April 2026): Activity logs CSV was built server-side using SQL `DATE()` and `TO_CHAR()` on UTC timestamps. The dashboard formats client-side in the user's local timezone. CSV showed different times than what the admin saw on screen.
+  * **Fix**: Moved CSV generation to client-side. Reuses the existing `/api/activity` endpoint (with limit=10000) and builds CSV using the same `format()` calls and `getActivityDetail()` logic as the dashboard table. Removed unused server-side `/api/activity/export` endpoint.
+  * **Affected files**: `admin-dashboard/src/components/AttendanceLogs.js`, `admin-dashboard/api/routes/activity.js`
+  * **Prevention**: When exporting data that's displayed in the UI, build the export client-side using the same formatting functions. Server-side formatting uses UTC which won't match local timezone display.
+
+* **Shift attendance CSV showed 0 for idle/active time** (April 2026): Export read `active_seconds`/`idle_seconds` from the `sessions` table. These columns are only populated when the desktop app sends a session-end request. Active (ongoing) sessions and older sessions that ended without this data always had 0.
+  * **Fix**: Query `activity_logs` within each session's time range instead. Each activity log has `is_idle` and `duration_seconds` which are always populated. Also calculate duration from timestamps for active sessions.
+  * **Affected files**: `admin-dashboard/api/routes/reports.js`
+  * **Prevention**: Never rely on `sessions.active_seconds`/`idle_seconds` as the source of truth for idle/active breakdown. Use `activity_logs` which is always populated by the desktop app. Same principle as the uptime inflation fix: `activity_logs` is the canonical source for time metrics.
+
+* **Working hours formula wrong in shift CSV** (April 2026): Initially calculated `Total Working Hours = active_seconds - idle_seconds` which makes no sense (active already excludes idle). Should be `Total Hours - Idle Time`.
+  * **Fix**: Changed to `Math.max(totalSecs - idleSeconds, 0)`.
+  * **Affected files**: `admin-dashboard/api/routes/reports.js`
+  * **Prevention**: Before implementing a formula from a column header, think about what the data fields actually represent. `active_seconds` is already "time not idle", so subtracting idle from it is double-counting.
+
+* **CSV detail column used wrong data source** (April 2026): The `App/URL Name` column in the activity CSV used `entry.domain || entry.url || ''` directly instead of using the `getActivityDetail()` function that the dashboard uses. This missed `file://` paths and had different logic for window titles.
+  * **Fix**: Use the same `getActivityDetail()` helper and its `detailStr` output.
+  * **Affected files**: `admin-dashboard/src/components/AttendanceLogs.js`
+  * **Prevention**: When exporting UI data to CSV, always reuse the exact same formatting/logic functions the UI uses. Don't re-derive values differently.
 
 ### RESOLVED — March 2026 (Stale Status & Real-time Idle)
 
