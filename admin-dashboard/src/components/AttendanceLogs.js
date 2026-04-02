@@ -163,7 +163,7 @@ function AttendanceLogs({ user, onLogout }) {
           selectedUser?.team_name || '',
           format(new Date(entry.timestamp), 'hh:mm:ss a'),
           entry.application_name || '--',
-          entry.domain || entry.url || '',
+          detailStr,
           entry.window_title || '',
           entry.keyboard_events > 0 ? entry.keyboard_events : '',
           entry.duration_seconds ? `${entry.duration_seconds}s` : '--',
