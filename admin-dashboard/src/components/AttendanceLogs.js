@@ -116,7 +116,7 @@ function AttendanceLogs({ user, onLogout }) {
     }
   }, [selectedUserId, logFilters]);
 
-  // Export CSV
+  // Export CSV — built client-side to match dashboard formatting exactly
   const exportCSV = async () => {
     if (!selectedUserId) return;
     setExporting(true);
@@ -127,16 +127,53 @@ function AttendanceLogs({ user, onLogout }) {
       const params = new URLSearchParams({
         userId: selectedUserId,
         startDate: startISO,
-        endDate: endISO
+        endDate: endISO,
+        sort: 'desc',
+        limit: '10000',
+        offset: '0'
       });
       if (logFilters.status) params.append('isIdle', logFilters.status === 'idle' ? 'true' : 'false');
 
-      const res = await axios.get(`${API_URL}/api/activity/export?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        responseType: 'blob'
+      const res = await axios.get(`${API_URL}/api/activity?${params}`, {
+        headers: { Authorization: `Bearer ${token}` }
       });
 
-      const url = window.URL.createObjectURL(new Blob([res.data]));
+      if (!res.data.success || !res.data.data.length) return;
+
+      const escapeCSV = (val) => {
+        const str = String(val ?? '');
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+          return '"' + str.replace(/"/g, '""') + '"';
+        }
+        return str;
+      };
+
+      // Find selected user to get email/team
+      const selectedUser = users.find(u => u.id === selectedUserId);
+      const csvHeader = 'Date,User Name,Email,Team,Time,Application,App/URL Name,Window Title,Keys,Duration,Status';
+      const csvRows = res.data.data.map(entry => {
+        const detail = getActivityDetail(entry);
+        const detailStr = detail.type === 'url' ? (entry.domain || detail.value)
+          : detail.type === 'file' ? detail.value
+          : detail.type === 'window' ? detail.value : '';
+        return [
+          format(new Date(entry.timestamp), 'yyyy-MM-dd'),
+          entry.full_name || selectedUserName,
+          entry.email || selectedUser?.email || '',
+          selectedUser?.team_name || '',
+          format(new Date(entry.timestamp), 'hh:mm:ss a'),
+          entry.application_name || '--',
+          entry.domain || entry.url || '',
+          entry.window_title || '',
+          entry.keyboard_events > 0 ? entry.keyboard_events : '',
+          entry.duration_seconds ? `${entry.duration_seconds}s` : '--',
+          entry.is_idle ? 'idle' : 'active'
+        ].map(escapeCSV).join(',');
+      });
+
+      const csv = [csvHeader, ...csvRows].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `activity-logs-${selectedUserName.replace(/\s+/g, '-')}-${logFilters.startDate}.csv`;
