@@ -315,6 +315,15 @@
 .al-refresh-btn:hover:not(:disabled) { background: #2563eb; }
 .al-refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.al-refresh-btn-sm {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 8px;
+}
+
 .al-export-btn {
   padding: 0 16px;
   height: 36px;

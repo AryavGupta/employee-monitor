@@ -338,6 +338,9 @@ function AttendanceLogs({ user, onLogout }) {
             <div className="al-section">
               <div className="al-section-header">
                 <h3>Shift Attendance</h3>
+                <button className="al-refresh-btn al-refresh-btn-sm" onClick={fetchShiftAttendance} disabled={shiftLoading}>
+                  {shiftLoading ? '...' : '↻'}
+                </button>
                 <button className="al-export-btn" onClick={exportShiftCSV}
                   disabled={exportingShift || !shiftData?.summary?.session_count}>
                   {exportingShift ? 'Exporting...' : 'Export CSV'}
