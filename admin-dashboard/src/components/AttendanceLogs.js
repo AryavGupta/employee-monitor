@@ -34,6 +34,8 @@ function AttendanceLogs({ user, onLogout }) {
   });
 
   const LOG_LIMIT = 100;
+  const [exporting, setExporting] = useState(false);
+  const [exportingShift, setExportingShift] = useState(false);
 
   // Fetch users on mount
   useEffect(() => { fetchUsers(); }, []);
@@ -113,6 +115,70 @@ function AttendanceLogs({ user, onLogout }) {
       setActivityLogLoading(false);
     }
   }, [selectedUserId, logFilters]);
+
+  // Export CSV
+  const exportCSV = async () => {
+    if (!selectedUserId) return;
+    setExporting(true);
+    try {
+      const token = localStorage.getItem('token');
+      const startISO = new Date(`${logFilters.startDate}T${logFilters.startTime}:00`).toISOString();
+      const endISO = new Date(`${logFilters.endDate}T${logFilters.endTime}:59`).toISOString();
+      const params = new URLSearchParams({
+        userId: selectedUserId,
+        startDate: startISO,
+        endDate: endISO
+      });
+      if (logFilters.status) params.append('isIdle', logFilters.status === 'idle' ? 'true' : 'false');
+
+      const res = await axios.get(`${API_URL}/api/activity/export?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `activity-logs-${selectedUserName.replace(/\s+/g, '-')}-${logFilters.startDate}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error exporting CSV:', err);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Export shift attendance CSV
+  const exportShiftCSV = async () => {
+    if (!selectedUserId) return;
+    setExportingShift(true);
+    try {
+      const token = localStorage.getItem('token');
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const params = new URLSearchParams({ userId: selectedUserId, shiftDate, timezone: tz });
+
+      const res = await axios.get(`${API_URL}/api/reports/shift-attendance/export?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `shift-attendance-${selectedUserName.replace(/\s+/g, '-')}-${shiftDate}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error exporting shift CSV:', err);
+    } finally {
+      setExportingShift(false);
+    }
+  };
 
   // Fetch shift attendance on user or shift date change (independent from logs)
   useEffect(() => {
@@ -235,6 +301,10 @@ function AttendanceLogs({ user, onLogout }) {
             <div className="al-section">
               <div className="al-section-header">
                 <h3>Shift Attendance</h3>
+                <button className="al-export-btn" onClick={exportShiftCSV}
+                  disabled={exportingShift || !shiftData?.summary?.session_count}>
+                  {exportingShift ? 'Exporting...' : 'Export CSV'}
+                </button>
                 <div className="al-shift-nav">
                   <button className="al-nav-btn" onClick={() => setShiftDate(format(addDays(new Date(shiftDate + 'T00:00:00'), -1), 'yyyy-MM-dd'))}>
                     &larr;
@@ -357,6 +427,9 @@ function AttendanceLogs({ user, onLogout }) {
                 </div>
                 <button className="al-refresh-btn" onClick={() => { setLogOffset(0); fetchActivityLogs(0); }} disabled={activityLogLoading}>
                   {activityLogLoading ? 'Loading...' : 'Refresh'}
+                </button>
+                <button className="al-export-btn" onClick={exportCSV} disabled={exporting || activityLog.length === 0}>
+                  {exporting ? 'Exporting...' : 'Export CSV'}
                 </button>
               </div>
 

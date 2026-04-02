@@ -97,6 +97,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 16px;
 }
 
@@ -105,6 +106,7 @@
   font-size: 17px;
   font-weight: 600;
   color: #0f172a;
+  flex: 1;
 }
 
 /* Shift Navigation */
@@ -313,6 +315,22 @@
 .al-refresh-btn:hover:not(:disabled) { background: #2563eb; }
 .al-refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.al-export-btn {
+  padding: 0 16px;
+  height: 36px;
+  border: 1px solid #10b981;
+  border-radius: 8px;
+  background: #ecfdf5;
+  color: #059669;
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+.al-export-btn:hover:not(:disabled) { background: #d1fae5; }
+.al-export-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* Summary Bar */
 .al-log-summary {
   display: flex;
@@ -385,7 +403,7 @@
   .al-log-filters { flex-direction: column; }
   .al-filter-group { width: 100%; }
   .al-filter-group input, .al-filter-group select { width: 100%; }
-  .al-refresh-btn { width: 100%; }
+  .al-refresh-btn, .al-export-btn { width: 100%; }
 }
 
 @media (max-width: 480px) {

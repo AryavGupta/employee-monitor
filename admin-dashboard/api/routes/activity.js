@@ -128,7 +128,11 @@ router.get('/', authenticateToken, async (req, res) => {
     const { userId, activityType, startDate, endDate, isIdle, shiftDate, sort = 'desc', limit = 100, offset = 0 } = req.query;
 
     let query = `
-      SELECT a.*, u.email, u.full_name FROM activity_logs a
+      SELECT a.id, a.user_id, a.activity_type, a.application_name, a.window_title,
+             a.is_idle, a.duration_seconds, a.keyboard_events, a.url, a.domain,
+             a.metadata, a.timestamp,
+             u.email, u.full_name
+      FROM activity_logs a
       JOIN users u ON a.user_id = u.id WHERE 1=1
     `;
     const params = [];
@@ -326,6 +330,101 @@ router.get('/top-apps', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Get top apps error:', error);
     res.status(500).json({ success: false, message: 'Failed to retrieve top applications' });
+  }
+});
+
+// Export activity logs as CSV
+router.get('/export', authenticateToken, async (req, res) => {
+  try {
+    const pool = req.app.locals.pool;
+    const { userId, startDate, endDate, isIdle } = req.query;
+
+    let query = `
+      SELECT DATE(a.timestamp) AS date,
+             u.full_name AS user_name,
+             u.email,
+             COALESCE(t.name, '') AS team,
+             COALESCE(a.application_name, COALESCE(a.domain, '')) AS app_url_name,
+             COALESCE(TO_CHAR(interval '1 second' * NULLIF(a.duration_seconds, 0), 'HH24:MI:SS'), '0:00:00') AS time,
+             COALESCE(a.window_title, '') AS window_title
+      FROM activity_logs a
+      JOIN users u ON a.user_id = u.id
+      LEFT JOIN teams t ON u.team_id = t.id
+      WHERE 1=1
+    `;
+    const params = [];
+    let paramCount = 1;
+
+    // Role-based filtering
+    if (req.user.role === 'admin') {
+      if (userId) {
+        query += ` AND a.user_id = $${paramCount}`;
+        params.push(userId);
+        paramCount++;
+      }
+    } else if (req.user.role === 'team_manager') {
+      const managedUserIds = await getManagedUserIds(pool, req.user.userId);
+      const allowedIds = [req.user.userId, ...managedUserIds];
+
+      if (userId && allowedIds.includes(userId)) {
+        query += ` AND a.user_id = $${paramCount}`;
+        params.push(userId);
+        paramCount++;
+      } else {
+        const placeholders = allowedIds.map((_, i) => `$${paramCount + i}`).join(', ');
+        query += ` AND a.user_id IN (${placeholders})`;
+        params.push(...allowedIds);
+        paramCount += allowedIds.length;
+      }
+    } else {
+      query += ` AND a.user_id = $${paramCount}`;
+      params.push(req.user.userId);
+      paramCount++;
+    }
+
+    if (startDate) {
+      query += ` AND a.timestamp >= $${paramCount}`;
+      params.push(startDate);
+      paramCount++;
+    }
+
+    if (endDate) {
+      query += ` AND a.timestamp <= $${paramCount}`;
+      params.push(endDate);
+      paramCount++;
+    }
+
+    if (isIdle !== undefined) {
+      query += ` AND a.is_idle = $${paramCount}`;
+      params.push(isIdle === 'true');
+      paramCount++;
+    }
+
+    query += ` ORDER BY a.timestamp DESC LIMIT 10000`;
+
+    const result = await pool.query(query, params);
+
+    // Build CSV
+    const csvHeader = 'Date,User name,Email,Team,App/URL name,Time,Window title';
+    const escapeCSV = (val) => {
+      const str = String(val ?? '');
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return '"' + str.replace(/"/g, '""') + '"';
+      }
+      return str;
+    };
+    const csvRows = result.rows.map(r =>
+      [r.date, r.user_name, r.email, r.team, r.app_url_name, r.time, r.window_title]
+        .map(escapeCSV).join(',')
+    );
+    const csv = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="activity-logs.csv"');
+    res.send(csv);
+  } catch (error) {
+    console.error('Export activity error:', error);
+    res.status(500).json({ success: false, message: 'Failed to export activities' });
   }
 });
 

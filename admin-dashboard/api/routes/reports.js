@@ -628,6 +628,173 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
   }
 });
 
+// Export shift attendance as CSV
+router.get('/shift-attendance/export', authenticateToken, async (req, res) => {
+  try {
+    const pool = req.app.locals.pool;
+    const { userId, shiftDate, timezone } = req.query;
+
+    if (!shiftDate) {
+      return res.status(400).json({ success: false, message: 'shiftDate is required' });
+    }
+
+    // Determine which users to export
+    let userIds = [];
+    if (req.user.role === 'admin') {
+      if (userId) {
+        userIds = [userId];
+      } else {
+        // All users
+        const allUsers = await pool.query('SELECT id FROM users ORDER BY full_name');
+        userIds = allUsers.rows.map(r => r.id);
+      }
+    } else {
+      userIds = [req.user.userId];
+    }
+
+    const tz = timezone || 'UTC';
+    const rows = [];
+
+    for (const uid of userIds) {
+      // Get user info + team working hours
+      const userResult = await pool.query(
+        `SELECT u.full_name, u.email, t.name AS team_name,
+                tms.working_hours_start, tms.working_hours_end
+         FROM users u
+         LEFT JOIN teams t ON u.team_id = t.id
+         LEFT JOIN team_monitoring_settings tms ON tms.team_id = u.team_id
+         WHERE u.id = $1`,
+        [uid]
+      );
+      if (userResult.rows.length === 0) continue;
+      const userInfo = userResult.rows[0];
+
+      const whStart = userInfo.working_hours_start;
+      const whEnd = userInfo.working_hours_end;
+
+      // Compute shift window (same logic as shift-attendance)
+      let shiftStartLocal, shiftEndLocal;
+      if (whStart && whEnd) {
+        const startParts = whStart.split(':').map(Number);
+        const endParts = whEnd.split(':').map(Number);
+        const isNight = startParts[0] * 60 + startParts[1] > endParts[0] * 60 + endParts[1];
+        shiftStartLocal = `${shiftDate}T${whStart.substring(0, 5)}:00`;
+        if (isNight) {
+          const nextDay = new Date(new Date(shiftDate).getTime() + 86400000).toISOString().split('T')[0];
+          shiftEndLocal = `${nextDay}T${whEnd.substring(0, 5)}:00`;
+        } else {
+          shiftEndLocal = `${shiftDate}T${whEnd.substring(0, 5)}:00`;
+        }
+      } else {
+        shiftStartLocal = `${shiftDate}T00:00:00`;
+        const nextDay = new Date(new Date(shiftDate).getTime() + 86400000).toISOString().split('T')[0];
+        shiftEndLocal = `${nextDay}T00:00:00`;
+      }
+
+      // Convert to UTC
+      const boundsResult = await pool.query(
+        `SELECT ($1::timestamp AT TIME ZONE $3) AT TIME ZONE 'UTC' as shift_start_utc,
+                ($2::timestamp AT TIME ZONE $3) AT TIME ZONE 'UTC' as shift_end_utc`,
+        [shiftStartLocal, shiftEndLocal, tz]
+      );
+      const { shift_start_utc, shift_end_utc } = boundsResult.rows[0];
+
+      // Get sessions
+      const sessionsResult = await pool.query(
+        `SELECT s.start_time, s.end_time, s.duration_seconds, s.active_seconds, s.idle_seconds, s.is_active,
+                p.last_heartbeat
+         FROM sessions s
+         LEFT JOIN user_presence p ON s.user_id = p.user_id
+         WHERE s.user_id = $1 AND s.start_time >= $2 AND s.start_time < $3
+         ORDER BY s.start_time ASC`,
+        [uid, shift_start_utc, shift_end_utc]
+      );
+
+      // Also get activity summary for idle/active breakdown
+      const activityResult = await pool.query(
+        `SELECT COALESCE(SUM(CASE WHEN is_idle = false THEN duration_seconds ELSE 0 END), 0) as active_secs,
+                COALESCE(SUM(CASE WHEN is_idle = true THEN duration_seconds ELSE 0 END), 0) as idle_secs
+         FROM activity_logs WHERE user_id = $1 AND shift_date = $2`,
+        [uid, shiftDate]
+      );
+      const actSummary = activityResult.rows[0];
+
+      if (sessionsResult.rows.length === 0) continue;
+
+      for (const s of sessionsResult.rows) {
+        const totalSecs = parseInt(s.duration_seconds) || 0;
+        // Per-session idle/active: proportionally distribute from activity summary if session-level not available
+        const sessionActive = parseInt(s.active_seconds) || 0;
+        const sessionIdle = parseInt(s.idle_seconds) || 0;
+        const workingHours = Math.max(totalSecs - sessionIdle, 0);
+
+        rows.push({
+          user_name: userInfo.full_name,
+          email: userInfo.email,
+          date: shiftDate,
+          login: s.start_time,
+          logout: s.end_time,
+          is_active: s.is_active && !s.end_time,
+          total_hours: totalSecs,
+          idle_time: sessionIdle,
+          active_time: sessionActive,
+          working_hours: workingHours
+        });
+      }
+    }
+
+    // Format helpers
+    const fmtDuration = (secs) => {
+      if (!secs || secs <= 0) return '0 min';
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      if (h > 0) return m > 0 ? `${h} Hours ${m} min` : `${h} Hours`;
+      return `${m} min`;
+    };
+    const fmtTime = (ts, tz) => {
+      if (!ts) return '';
+      try {
+        return new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz });
+      } catch { return new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }); }
+    };
+    const fmtDate = (d) => {
+      const dt = new Date(d + 'T00:00:00');
+      const day = dt.getDate();
+      const suffix = day === 1 || day === 21 || day === 31 ? 'st' : day === 2 || day === 22 ? 'nd' : day === 3 || day === 23 ? 'rd' : 'th';
+      return `${day}${suffix} ${dt.toLocaleString('en-US', { month: 'long' })}`;
+    };
+
+    // Build CSV
+    const csvHeader = 'User Name,Email ID,Date,Log in,Log Out,Total Hours,Idle Time,Active Time,Total Working Hours (Active Hours - Idle Hours)';
+    const escapeCSV = (val) => {
+      const str = String(val ?? '');
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return '"' + str.replace(/"/g, '""') + '"';
+      }
+      return str;
+    };
+    const csvRows = rows.map(r => [
+      r.user_name,
+      r.email,
+      fmtDate(r.date),
+      fmtTime(r.login, tz),
+      r.is_active ? 'Active' : fmtTime(r.logout, tz),
+      fmtDuration(r.total_hours),
+      fmtDuration(r.idle_time),
+      fmtDuration(r.active_time),
+      fmtDuration(r.working_hours)
+    ].map(escapeCSV).join(','));
+
+    const csv = [csvHeader, ...csvRows].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="shift-attendance-${shiftDate}.csv"`);
+    res.send(csv);
+  } catch (error) {
+    console.error('Export shift attendance error:', error);
+    res.status(500).json({ success: false, message: 'Failed to export shift attendance' });
+  }
+});
+
 // =====================================================
 // App Categories Management
 // =====================================================
