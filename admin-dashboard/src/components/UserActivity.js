@@ -144,7 +144,7 @@ function UserActivity({ user, onLogout }) {
       <div className="main-content">
         <div className="content-header">
           <div>
-            <h1>Employees</h1>
+            <h1>User Activity</h1>
             <p className="content-subtitle">Track employee sessions, uptime, and activity</p>
           </div>
         </div>

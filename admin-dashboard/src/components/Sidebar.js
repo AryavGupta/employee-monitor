@@ -124,7 +124,7 @@ function Sidebar({ user, onLogout, activePage }) {
           {(user.role === 'admin' || user.role === 'team_manager') && (
             <Link to="/user-activity" className={`nav-item ${activePage === 'user-activity' ? 'active' : ''}`}>
               <span className="nav-icon"><Icons.Employees /></span>
-              <span>Employees</span>
+              <span>User Activity</span>
             </Link>
           )}
 

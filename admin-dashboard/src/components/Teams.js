@@ -269,7 +269,7 @@ function Teams({ user, onLogout }) {
         <div className="content-header">
           <div>
             <h1>Teams</h1>
-            <p>{user.role === 'admin' ? 'Manage teams and their monitoring settings' : 'View your managed teams'}</p>
+            <p className="content-subtitle">{user.role === 'admin' ? 'Manage teams and their monitoring settings' : 'View your managed teams'}</p>
           </div>
           {user.role === 'admin' && (
             <button className="btn-primary" onClick={() => setShowCreateModal(true)}>
