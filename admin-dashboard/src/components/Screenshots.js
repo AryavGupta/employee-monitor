@@ -235,8 +235,16 @@ function Screenshots({ user, onLogout }) {
 
       <div className="main-content">
         <div className="content-header">
-          <h1>Screenshots</h1>
-          <p>View and manage employee screenshots</p>
+          <div>
+            <h1>Screenshots</h1>
+            <p className="content-subtitle">View captured screenshots for the selected employees</p>
+          </div>
+          <div className="header-right">
+            <span className="header-user-name">{filters.userName || user.fullName}</span>
+            <div className="header-avatar">
+              {(filters.userName || user.fullName)?.charAt(0).toUpperCase()}
+            </div>
+          </div>
         </div>
 
         {/* User Selection */}
@@ -283,15 +291,25 @@ function Screenshots({ user, onLogout }) {
         {filters.userId && (
           <>
             {stats && (
-              <div className="stats-row">
-                <div className="stat-pill">
-                  <span className="stat-num">{stats.total_screenshots || 0}</span>
-                  <span className="stat-txt">Total</span>
-                </div>
-                <div className="stat-pill flagged">
-                  <span className="stat-num">{stats.flagged_screenshots || 0}</span>
-                  <span className="stat-txt">Flagged</span>
-                </div>
+              <div className="stats-tabs">
+                <button
+                  className={`stats-tab ${filters.flagged !== 'true' ? 'active' : ''}`}
+                  onClick={() => handleFilterChange('flagged', '')}
+                >
+                  <span className="tab-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+                  </span>
+                  <strong>{stats.total_screenshots || 0}</strong> Total
+                </button>
+                <button
+                  className={`stats-tab flagged ${filters.flagged === 'true' ? 'active' : ''}`}
+                  onClick={() => handleFilterChange('flagged', filters.flagged === 'true' ? '' : 'true')}
+                >
+                  <span className="tab-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/></svg>
+                  </span>
+                  <strong>{stats.flagged_screenshots || 0}</strong> Flagged
+                </button>
               </div>
             )}
 
@@ -373,9 +391,15 @@ function Screenshots({ user, onLogout }) {
                       <div className="screenshot-thumbnail">
                         <img src={getImageUrl(screenshot)} alt="Screenshot" loading="lazy" />
                         {screenshot.is_flagged && <div className="flag-badge">Flagged</div>}
-                      </div>
-                      <div className="screenshot-info">
-                        <span>{format(new Date(screenshot.captured_at), 'MMM dd, HH:mm')}</span>
+                        <div className="screenshot-overlay">
+                          <div className="overlay-user">
+                            <div className="overlay-avatar">
+                              {(screenshot.full_name || filters.userName)?.charAt(0).toUpperCase()}
+                            </div>
+                            <span>{screenshot.full_name || filters.userName}</span>
+                          </div>
+                          <span className="overlay-time">{format(new Date(screenshot.captured_at), 'h:mm a')}</span>
+                        </div>
                       </div>
                     </div>
                   ))

@@ -107,8 +107,12 @@
 }
 
 .nav-item.active {
-  background: rgba(255, 255, 255, 0.1);
+  background: #3b82f6;
   color: white;
+}
+
+.nav-item.active:hover {
+  background: #2563eb;
 }
 
 .nav-item.active .nav-icon {
