@@ -564,6 +564,55 @@ function setupPowerMonitorHandlers() {
   console.log('Power monitor handlers registered');
 }
 
+// Synchronous session end for ungraceful exits (shutdown, SIGTERM, Task Manager)
+// Uses Node's http module directly to avoid async issues during process exit
+function sendSessionEndSync() {
+  if (!CONFIG.USER_TOKEN || !currentSessionId) return;
+  try {
+    const url = new URL(`${CONFIG.API_URL}/api/sessions/end`);
+    const data = JSON.stringify({
+      totalActiveTime: totalActiveSeconds,
+      totalIdleTime: totalIdleSeconds,
+      notes: `Session ended by process exit`
+    });
+    const http = require(url.protocol === 'https:' ? 'https' : 'http');
+    const req = http.request({
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CONFIG.USER_TOKEN}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data)
+      },
+      timeout: 3000
+    });
+    req.write(data);
+    req.end();
+  } catch (e) {
+    // Best effort — process is dying
+  }
+}
+
+// Handle SIGTERM (Task Manager on some systems, service stop)
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received - ending session');
+  sendSessionEndSync();
+});
+
+// Handle SIGINT (Ctrl+C in terminal)
+process.on('SIGINT', () => {
+  console.log('SIGINT received - ending session');
+  sendSessionEndSync();
+  process.exit(0);
+});
+
+// Last resort: process exit handler (runs for ANY exit)
+process.on('exit', () => {
+  sendSessionEndSync();
+});
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     // Don't quit if tracking is active and tray exists

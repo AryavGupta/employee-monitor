@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken, authorizeAdmin, authorizeAdminOrManager, getManagedTeamIds, getManagedUserIds } = require('./auth');
+const { closeAllStaleSessions } = require('./sessions');
 
 // Heartbeat - Desktop app sends this every 30 seconds
 router.post('/heartbeat', authenticateToken, async (req, res) => {
@@ -107,6 +108,9 @@ router.get('/online', authenticateToken, authorizeAdminOrManager, async (req, re
 router.get('/summary', authenticateToken, authorizeAdminOrManager, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
+
+    // Auto-close stale sessions so presence data is accurate
+    try { await closeAllStaleSessions(pool); } catch (e) { /* non-critical */ }
 
     // Single query instead of 2 separate queries
     let query = `

@@ -285,3 +285,4 @@ router.get('/summary', authenticateToken, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.closeAllStaleSessions = closeAllStaleSessions;
