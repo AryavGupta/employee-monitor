@@ -153,7 +153,7 @@ function AttendanceLogs({ user, onLogout }) {
       const csvHeader = 'Date,User Name,Email,Team,Time,Application,App/URL Name,Window Title,Keys,Duration,Status';
       const csvRows = res.data.data.map(entry => {
         const detail = getActivityDetail(entry);
-        const detailStr = detail.type === 'url' ? (entry.domain || detail.value)
+        const detailStr = detail.type === 'url' ? detail.value
           : detail.type === 'file' ? detail.value
           : detail.type === 'window' ? detail.value : '';
         return [
@@ -509,7 +509,7 @@ function AttendanceLogs({ user, onLogout }) {
                               <td className="al-col-time">{format(new Date(entry.timestamp), 'hh:mm:ss a')}</td>
                               <td className="al-col-app"><strong>{entry.application_name || '--'}</strong></td>
                               <td className="al-col-detail">
-                                {detail.type === 'url' && <span className="al-detail-url" title={detail.value}>{detail.domain || detail.value}</span>}
+                                {detail.type === 'url' && <span className="al-detail-url" title={detail.value}>{detail.value}</span>}
                                 {detail.type === 'file' && <span className="al-detail-file" title={detail.value}>{detail.value}</span>}
                                 {detail.type === 'window' && <span className="al-detail-window" title={detail.value}>{detail.value.length > 60 ? detail.value.substring(0, 60) + '...' : detail.value}</span>}
                               </td>
