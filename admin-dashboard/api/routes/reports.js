@@ -597,7 +597,7 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
       [targetUserId, shift_start_utc, shift_end_utc]
     );
 
-    // 4. Query activity summary for this shift_date
+    // 4. Query activity summary using same UTC time range as sessions
     const activityResult = await pool.query(
       `SELECT
         COALESCE(SUM(CASE WHEN is_idle = false THEN duration_seconds ELSE 0 END), 0) as active_seconds,
@@ -607,8 +607,8 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
         MAX(timestamp) as last_activity,
         COUNT(*) as activity_count
        FROM activity_logs
-       WHERE user_id = $1 AND shift_date = $2`,
-      [targetUserId, shiftDate]
+       WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3`,
+      [targetUserId, shift_start_utc, shift_end_utc]
     );
 
     const activity = activityResult.rows[0];
