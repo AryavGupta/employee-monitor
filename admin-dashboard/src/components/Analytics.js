@@ -373,8 +373,10 @@ function Analytics({ user, onLogout }) {
 
       <div className="main-content">
         <div className="content-header">
-          <h1>Analytics</h1>
-          <p>View detailed activity metrics for employees</p>
+          <div>
+            <h1>Analytics</h1>
+          </div>
+          <p className="content-subtitle-right">View detailed activity metrics for employees</p>
         </div>
 
         {/* User Selection */}
@@ -483,7 +485,7 @@ function Analytics({ user, onLogout }) {
             ) : (
               <>
                 {/* Summary Stats */}
-                <div className="stats-grid compact">
+                <div className="stats-grid">
                   <div className="stat-card highlight">
                     <div className="stat-icon productivity">
                       <Icons.Productivity />
@@ -552,7 +554,7 @@ function Analytics({ user, onLogout }) {
                     if (totalOvertimeSeconds > 0) {
                       return (
                         <div className="stat-card">
-                          <div className="stat-icon" style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}>
+                          <div className="stat-icon" style={{ background: '#fff7ed', color: '#ea580c' }}>
                             <Icons.Uptime />
                           </div>
                           <div className="stat-info">
