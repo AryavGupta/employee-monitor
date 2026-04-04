@@ -192,25 +192,27 @@
 }
 
 .stat-card.highlight {
-  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  background: #3B82F6;
   border: none;
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.3);
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.3);
 }
 
 .stat-card.highlight:hover {
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.4);
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.4);
+  background: #2563eb;
 }
 
 .stat-card.highlight .stat-value {
   color: white;
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
 }
 
 .stat-card.highlight .stat-label {
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(255, 255, 255, 0.75);
 }
 
 .stat-card.highlight .stat-icon {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.2);
   color: white;
 }
 
@@ -279,8 +281,9 @@
   font-size: 26px;
   font-weight: 700;
   line-height: 1.1;
-  color: #0f172a;
+  color: #0D0D0D;
   letter-spacing: -0.02em;
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
 }
 
 .stat-label {

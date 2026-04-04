@@ -1,7 +1,7 @@
 /* App.css - Global Styles & Layout */
 
-/* Import Inter font for modern SaaS look */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+/* Import fonts from design system */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
 * {
   margin: 0;
@@ -15,7 +15,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background: #f8fafc;
-  color: #0f172a;
+  color: #0D0D0D;
   font-size: 14px;
   line-height: 1.5;
 }
@@ -79,10 +79,15 @@ body {
   min-width: 200px;
 }
 
+h1, h2, h3, h4 {
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
+}
+
 .content-header h1 {
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
   font-size: 28px;
   font-weight: 700;
-  color: #0f172a;
+  color: #0D0D0D;
   letter-spacing: -0.02em;
   line-height: 1.2;
   margin-bottom: 6px;

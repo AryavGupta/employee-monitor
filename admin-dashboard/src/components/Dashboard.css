@@ -87,15 +87,16 @@
 }
 
 .dash-stat-card.dark {
-  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-  color: white;
-  border: none;
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.25);
+  background: #FFFFFF;
+  color: #0D0D0D;
+  border: 1px solid #E5E7EB;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .dash-stat-card.dark:hover {
-  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.35);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
   transform: translateY(-2px);
+  border-color: #cbd5e1;
 }
 
 .dash-stat-content {
@@ -106,11 +107,11 @@
 }
 
 .dash-stat-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  font-weight: 600;
+  color: #7A7A7A;
   text-transform: uppercase;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
 }
 
 .dash-stat-value {
@@ -118,16 +119,18 @@
   font-weight: 700;
   line-height: 1.1;
   letter-spacing: -0.02em;
+  color: #0D0D0D;
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
 }
 
 .dash-stat-sub {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.45);
+  color: #B0B0B0;
   margin-top: 4px;
 }
 
 .dash-stat-change.positive {
-  color: #34d399;
+  color: #22C55E;
 }
 
 .dash-stat-icon {
@@ -146,23 +149,23 @@
 }
 
 .dash-stat-icon.teal {
-  background: rgba(20, 184, 166, 0.15);
-  color: #2dd4bf;
+  background: #F0FDF4;
+  color: #22C55E;
 }
 
 .dash-stat-icon.green {
-  background: rgba(34, 197, 94, 0.15);
-  color: #4ade80;
+  background: #EFF6FF;
+  color: #3B82F6;
 }
 
 .dash-stat-icon.amber {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
+  background: #FFFBEB;
+  color: #F59E0B;
 }
 
 .dash-stat-icon.blue {
-  background: rgba(99, 102, 241, 0.15);
-  color: #818cf8;
+  background: #EFF6FF;
+  color: #3B82F6;
 }
 
 /* ============================================

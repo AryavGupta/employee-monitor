@@ -213,22 +213,23 @@
 .stat-item {
   text-align: center;
   padding: 20px 16px;
-  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  background: #FFFFFF;
   border-radius: 12px;
-  border: none;
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.25);
+  border: 1px solid #E5E7EB;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .stat-item .stat-value {
   display: block;
   font-size: 26px;
   font-weight: 700;
-  color: white;
+  color: #0D0D0D;
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
 }
 
 .stat-item .stat-label {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.6);
+  color: #7A7A7A;
   margin-top: 4px;
   text-transform: uppercase;
   letter-spacing: 0.02em;
