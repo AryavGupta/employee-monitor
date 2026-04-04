@@ -103,14 +103,14 @@ function Sidebar({ user, onLogout, activePage }) {
 
   return (
     <div className="sidebar">
-      <div className="sidebar-header">
+      <Link to="/dashboard" className="sidebar-header" style={{ textDecoration: 'none', color: 'inherit' }}>
         <div className="sidebar-brand">
           <div className="sidebar-logo">
             <Icons.Monitor />
           </div>
           <h2>EmpMonitor</h2>
         </div>
-      </div>
+      </Link>
 
       <nav className="sidebar-nav">
         <div className="nav-section">
@@ -152,8 +152,8 @@ function Sidebar({ user, onLogout, activePage }) {
 
           {user.role === 'admin' && (
             <Link to="/users" className={`nav-item ${activePage === 'users' ? 'active' : ''}`}>
-              <span className="nav-icon"><Icons.Reports /></span>
-              <span>Reports</span>
+              <span className="nav-icon"><Icons.Users /></span>
+              <span>Users</span>
             </Link>
           )}
 

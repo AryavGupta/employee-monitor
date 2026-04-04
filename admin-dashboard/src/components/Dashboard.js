@@ -38,8 +38,12 @@ function Dashboard({ user, onLogout }) {
 
   useEffect(() => {
     fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 30000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      if (!document.hidden) fetchDashboardData();
+    }, 60000);
+    const onVisible = () => { if (!document.hidden) fetchDashboardData(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(interval); document.removeEventListener('visibilitychange', onVisible); };
   }, [fetchDashboardData]);
 
   const getStatusBadge = (status) => {

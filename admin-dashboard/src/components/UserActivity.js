@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import Sidebar from './Sidebar';
@@ -55,8 +55,15 @@ function UserActivity({ user, onLogout }) {
 
   useEffect(() => {
     fetchSessions();
-    const refreshInterval = setInterval(fetchSessions, 30000);
-    return () => clearInterval(refreshInterval);
+    const refreshInterval = setInterval(() => {
+      if (!document.hidden) fetchSessions();
+    }, 60000);
+    const handleVisibility = () => { if (!document.hidden) fetchSessions(); };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      clearInterval(refreshInterval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [fetchSessions]);
 
   const calculateUptime = (session) => {
@@ -82,13 +89,12 @@ function UserActivity({ user, onLogout }) {
     return `${h}h ${m}m`;
   };
 
-  const getTotalUptime = () => formatSeconds(activitySummary.totalSeconds);
-  const getActiveTime = () => formatSeconds(activitySummary.totalActiveSeconds);
-  const getIdleTime = () => formatSeconds(activitySummary.totalIdleSeconds);
-
-  const getActiveUsers = () => {
-    return new Set(sessions.filter(s => s.effective_status === 'active' || s.effective_status === 'idle').map(s => s.user_id)).size;
-  };
+  const stats = useMemo(() => ({
+    totalUptime: formatSeconds(activitySummary.totalSeconds),
+    activeTime: formatSeconds(activitySummary.totalActiveSeconds),
+    idleTime: formatSeconds(activitySummary.totalIdleSeconds),
+    activeUsers: new Set(sessions.filter(s => s.effective_status === 'active' || s.effective_status === 'idle').map(s => s.user_id)).size
+  }), [activitySummary, sessions]);
 
   const formatIdleTime = (seconds) => {
     if (!seconds || seconds < 10) return null;
@@ -149,7 +155,7 @@ function UserActivity({ user, onLogout }) {
           <div className="ua-stat-card dark">
             <div className="ua-stat-content">
               <div className="ua-stat-label">Currently Active</div>
-              <div className="ua-stat-value">{getActiveUsers()}</div>
+              <div className="ua-stat-value">{stats.activeUsers}</div>
             </div>
             <div className="ua-stat-icon green">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>
@@ -159,7 +165,7 @@ function UserActivity({ user, onLogout }) {
           <div className="ua-stat-card dark">
             <div className="ua-stat-content">
               <div className="ua-stat-label">Active Time</div>
-              <div className="ua-stat-value">{getActiveTime()}</div>
+              <div className="ua-stat-value">{stats.activeTime}</div>
             </div>
             <div className="ua-stat-icon blue">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -169,7 +175,7 @@ function UserActivity({ user, onLogout }) {
           <div className="ua-stat-card dark">
             <div className="ua-stat-content">
               <div className="ua-stat-label">Total Uptime</div>
-              <div className="ua-stat-value">{getTotalUptime()}</div>
+              <div className="ua-stat-value">{stats.totalUptime}</div>
             </div>
             <div className="ua-stat-icon amber">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import axios from 'axios';
 import { format, addDays } from 'date-fns';
 import Sidebar from './Sidebar';
@@ -253,13 +253,13 @@ function AttendanceLogs({ user, onLogout }) {
 
   const filteredUsers = useFilteredUsers(users, userSearch);
 
-  // Log summary stats
-  const logSummary = {
+  // Log summary stats (memoized to avoid recomputing on every render)
+  const logSummary = useMemo(() => ({
     total: activityLog.length,
     active: activityLog.filter(e => !e.is_idle).length,
     idle: activityLog.filter(e => e.is_idle).length,
     totalDuration: activityLog.reduce((sum, e) => sum + (parseInt(e.duration_seconds) || 0), 0)
-  };
+  }), [activityLog]);
 
   return (
     <div className="app-layout">

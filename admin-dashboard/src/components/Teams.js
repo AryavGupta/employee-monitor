@@ -2,14 +2,15 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import Sidebar from './Sidebar';
+import { useUsers } from '../hooks/useUsers';
 import './Teams.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
 const STORAGE_KEY = 'teams_selectedTeamId';
 
 function Teams({ user, onLogout }) {
+  const { users: allUsers } = useUsers();
   const [teams, setTeams] = useState([]);
-  const [allUsers, setAllUsers] = useState([]);
   const [unassignedUsers, setUnassignedUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedTeam, setSelectedTeam] = useState(null);
@@ -37,20 +38,6 @@ function Teams({ user, onLogout }) {
       setLoading(false);
     }
     return [];
-  }, []);
-
-  const fetchAllUsers = useCallback(async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const response = await axios.get(`${API_URL}/api/users`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (response.data.success) {
-        setAllUsers(response.data.data);
-      }
-    } catch (error) {
-      console.error('Error fetching users:', error);
-    }
   }, []);
 
   const fetchUnassignedUsers = useCallback(async () => {
@@ -88,7 +75,7 @@ function Teams({ user, onLogout }) {
   // Initial load - restore selected team from storage
   useEffect(() => {
     const initializeData = async () => {
-      const [teamsData] = await Promise.all([fetchTeams(), fetchAllUsers(), fetchUnassignedUsers()]);
+      const [teamsData] = await Promise.all([fetchTeams(), fetchUnassignedUsers()]);
 
       // Restore selected team if stored
       if (!initialLoadDone.current) {
@@ -100,7 +87,7 @@ function Teams({ user, onLogout }) {
       }
     };
     initializeData();
-  }, [fetchTeams, fetchAllUsers, fetchTeamDetails]);
+  }, [fetchTeams, fetchUnassignedUsers, fetchTeamDetails]);
 
   const handleCreateTeam = async (e) => {
     e.preventDefault();

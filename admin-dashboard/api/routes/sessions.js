@@ -3,73 +3,56 @@ const router = express.Router();
 const { authenticateToken } = require('./auth');
 
 // Close stale active sessions for a specific user.
-// Uses the best available "last alive" timestamp: heartbeat > activity_log > screenshot.
-// Called when: (1) user starts a new session, (2) dashboard fetches sessions (auto-cleanup).
+// Uses CTE to compute end_time once instead of 6+ repeated subqueries.
 async function closeStaleSessionsForUser(pool, userId) {
   return pool.query(
-    `UPDATE sessions s SET is_active = false,
-     end_time = COALESCE(
-       GREATEST(
-         (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
-         (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = $1 AND timestamp >= s.start_time),
-         (SELECT MAX(captured_at) FROM screenshots WHERE user_id = $1 AND captured_at >= s.start_time)
-       ),
-       (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
-       (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = $1 AND timestamp >= s.start_time),
-       (SELECT MAX(captured_at) FROM screenshots WHERE user_id = $1 AND captured_at >= s.start_time),
-       CURRENT_TIMESTAMP
-     ),
-     duration_seconds = EXTRACT(EPOCH FROM (
-       COALESCE(
-         GREATEST(
-           (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
-           (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = $1 AND timestamp >= s.start_time),
-           (SELECT MAX(captured_at) FROM screenshots WHERE user_id = $1 AND captured_at >= s.start_time)
-         ),
-         (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
-         (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = $1 AND timestamp >= s.start_time),
-         (SELECT MAX(captured_at) FROM screenshots WHERE user_id = $1 AND captured_at >= s.start_time),
-         CURRENT_TIMESTAMP
-       ) - s.start_time
-     ))
-     WHERE s.user_id = $1 AND s.is_active = true`,
+    `WITH end_times AS (
+       SELECT s.id,
+         COALESCE(
+           GREATEST(
+             (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
+             (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = $1 AND timestamp >= s.start_time),
+             (SELECT MAX(captured_at) FROM screenshots WHERE user_id = $1 AND captured_at >= s.start_time)
+           ),
+           CURRENT_TIMESTAMP
+         ) as end_val
+       FROM sessions s
+       WHERE s.user_id = $1 AND s.is_active = true
+     )
+     UPDATE sessions s SET
+       is_active = false,
+       end_time = et.end_val,
+       duration_seconds = EXTRACT(EPOCH FROM (et.end_val - s.start_time))
+     FROM end_times et WHERE s.id = et.id`,
     [userId]
   );
 }
 
-// Close ALL stale sessions across all users where heartbeat is older than 90 seconds.
-// Called when dashboard fetches session list — auto-cleans orphaned sessions.
+// Close ALL stale sessions across all users where heartbeat is older than 5 minutes.
+// Uses CTE to compute end_time once per session instead of 6+ repeated subqueries per row.
 async function closeAllStaleSessions(pool) {
   return pool.query(
-    `UPDATE sessions s SET is_active = false,
-     end_time = COALESCE(
-       GREATEST(
-         (SELECT last_heartbeat FROM user_presence WHERE user_id = s.user_id),
-         (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = s.user_id AND timestamp >= s.start_time),
-         (SELECT MAX(captured_at) FROM screenshots WHERE user_id = s.user_id AND captured_at >= s.start_time)
-       ),
-       (SELECT last_heartbeat FROM user_presence WHERE user_id = s.user_id),
-       (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = s.user_id AND timestamp >= s.start_time),
-       (SELECT MAX(captured_at) FROM screenshots WHERE user_id = s.user_id AND captured_at >= s.start_time),
-       CURRENT_TIMESTAMP
-     ),
-     duration_seconds = EXTRACT(EPOCH FROM (
-       COALESCE(
-         GREATEST(
-           (SELECT last_heartbeat FROM user_presence WHERE user_id = s.user_id),
-           (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = s.user_id AND timestamp >= s.start_time),
-           (SELECT MAX(captured_at) FROM screenshots WHERE user_id = s.user_id AND captured_at >= s.start_time)
-         ),
-         (SELECT last_heartbeat FROM user_presence WHERE user_id = s.user_id),
-         (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = s.user_id AND timestamp >= s.start_time),
-         (SELECT MAX(captured_at) FROM screenshots WHERE user_id = s.user_id AND captured_at >= s.start_time),
-         CURRENT_TIMESTAMP
-       ) - s.start_time
-     ))
-     WHERE s.is_active = true
-       AND (
-         NOT EXISTS (SELECT 1 FROM user_presence WHERE user_id = s.user_id AND last_heartbeat > NOW() - INTERVAL '5 minutes')
-       )`
+    `WITH stale AS (
+       SELECT s.id, s.user_id, s.start_time,
+         COALESCE(
+           GREATEST(
+             p.last_heartbeat,
+             (SELECT MAX(timestamp) FROM activity_logs WHERE user_id = s.user_id AND timestamp >= s.start_time),
+             (SELECT MAX(captured_at) FROM screenshots WHERE user_id = s.user_id AND captured_at >= s.start_time)
+           ),
+           p.last_heartbeat,
+           CURRENT_TIMESTAMP
+         ) as end_val
+       FROM sessions s
+       LEFT JOIN user_presence p ON s.user_id = p.user_id
+       WHERE s.is_active = true
+         AND (p.last_heartbeat IS NULL OR p.last_heartbeat <= NOW() - INTERVAL '5 minutes')
+     )
+     UPDATE sessions s SET
+       is_active = false,
+       end_time = st.end_val,
+       duration_seconds = EXTRACT(EPOCH FROM (st.end_val - s.start_time))
+     FROM stale st WHERE s.id = st.id`
   );
 }
 
