@@ -759,8 +759,6 @@ router.get('/shift-attendance/export', authenticateToken, async (req, res) => {
       for (const s of sessionsResult.rows) {
         const sessionStart = new Date(s.start_time).getTime();
         const sessionEnd = s.end_time ? new Date(s.end_time).getTime() : Date.now();
-        const totalSecs = parseInt(s.duration_seconds) || Math.round((sessionEnd - sessionStart) / 1000);
-
         // Sum activity logs that fall within this session's time range
         let activeSeconds = 0;
         let idleSeconds = 0;
@@ -776,7 +774,8 @@ router.get('/shift-attendance/export', authenticateToken, async (req, res) => {
           }
         }
 
-        const workingHours = Math.max(totalSecs - idleSeconds, 0);
+        const totalSecs = activeSeconds + idleSeconds;
+        const workingHours = activeSeconds;
 
         rows.push({
           user_name: userInfo.full_name,
@@ -815,7 +814,7 @@ router.get('/shift-attendance/export', authenticateToken, async (req, res) => {
     };
 
     // Build CSV
-    const csvHeader = 'User Name,Email ID,Date,Log in,Log Out,Total Hours,Idle Time,Active Time,Total Working Hours (Active Hours - Idle Hours)';
+    const csvHeader = 'User Name,Email ID,Date,Log in,Log Out,Total Hours,Idle Time,Active Time,Total Working Hours';
     const escapeCSV = (val) => {
       const str = String(val ?? '');
       if (str.includes(',') || str.includes('"') || str.includes('\n')) {

@@ -52,6 +52,9 @@
 
 *No critical issues at this time.*
 
+### Recently Fixed (April 2026)
+- [x] Shift attendance CSV export: Total/Active/Idle/Working hours mismatched due to mixing wall-clock and activity-log data sources. Fixed by deriving all metrics from `activity_logs`.
+
 ---
 
 ## Recently Completed

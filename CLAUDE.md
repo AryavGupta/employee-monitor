@@ -363,6 +363,11 @@ Before finalizing any change, verify:
 
 ### RESOLVED — April 2026 (CSV Export)
 
+* **Shift attendance export mixed wall-clock and activity-log data sources** (April 2026): The `/api/reports/shift-attendance/export` endpoint calculated `Total Hours` from session wall-clock time (`session.duration_seconds` or `end_time - start_time`) but `Active Time` and `Idle Time` from `activity_logs`. Since activity logs don't cover every second of wall-clock time (gaps from startup, between checks), `Active + Idle != Total`. `Working Hours` was `Total - Idle` which mixed the two sources, producing wrong values.
+  * **Fix**: Changed `Total Hours` to `activeSeconds + idleSeconds` (from activity logs, matching the UI endpoint). Changed `Working Hours` to just `activeSeconds`. Fixed misleading CSV header.
+  * **Affected files**: `admin-dashboard/api/routes/reports.js` (export endpoint)
+  * **Prevention**: When computing related time metrics (total, active, idle, working), ALL must come from the same data source. Never mix session wall-clock duration with activity-log-based sums. The UI endpoint (`/api/reports/shift-attendance`) already does this correctly — use it as the reference pattern.
+
 * **CSV export times/dates mismatched dashboard** (April 2026): Activity logs CSV was built server-side using SQL `DATE()` and `TO_CHAR()` on UTC timestamps. The dashboard formats client-side in the user's local timezone. CSV showed different times than what the admin saw on screen.
   * **Fix**: Moved CSV generation to client-side. Reuses the existing `/api/activity` endpoint (with limit=10000) and builds CSV using the same `format()` calls and `getActivityDetail()` logic as the dashboard table. Removed unused server-side `/api/activity/export` endpoint.
   * **Affected files**: `admin-dashboard/src/components/AttendanceLogs.js`, `admin-dashboard/api/routes/activity.js`
