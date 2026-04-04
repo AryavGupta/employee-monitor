@@ -9,6 +9,11 @@
   box-sizing: border-box;
 }
 
+/* Lock body scroll when any modal/overlay is open */
+body.modal-open {
+  overflow: hidden;
+}
+
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto',
     'Helvetica Neue', sans-serif;

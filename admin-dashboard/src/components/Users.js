@@ -3,6 +3,7 @@ import axios from 'axios';
 import Sidebar from './Sidebar';
 import UserModal from './UserModal';
 import Toast from './Toast';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import './Users.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -27,6 +28,7 @@ function Users({ user, onLogout }) {
 
   // Delete confirmation
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  useBodyScrollLock(showModal || showDeleteConfirm);
   const [userToDelete, setUserToDelete] = useState(null);
 
   const fetchUsers = useCallback(async () => {

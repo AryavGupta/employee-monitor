@@ -3,6 +3,7 @@ import axios from 'axios';
 import { format } from 'date-fns';
 import Sidebar from './Sidebar';
 import { useUsers } from '../hooks/useUsers';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import './Teams.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -18,6 +19,7 @@ function Teams({ user, onLogout }) {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [editingTeam, setEditingTeam] = useState(null);
+  useBodyScrollLock(showCreateModal || showSettingsModal || showAddMemberModal || !!editingTeam);
   const [formData, setFormData] = useState({ name: '', description: '', manager_id: '' });
   const [settingsData, setSettingsData] = useState({});
   const initialLoadDone = useRef(false);

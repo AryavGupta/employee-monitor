@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import Sidebar from './Sidebar';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import './Profile.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -11,6 +12,7 @@ function Profile({ user, onLogout }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  useBodyScrollLock(showPasswordModal);
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
     newPassword: '',

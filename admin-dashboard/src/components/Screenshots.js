@@ -3,6 +3,7 @@ import axios from 'axios';
 import { format } from 'date-fns';
 import Sidebar from './Sidebar';
 import { useUsers, useFilteredUsers } from '../hooks/useUsers';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import './Screenshots.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -24,6 +25,7 @@ function Screenshots({ user, onLogout }) {
   const [loading, setLoading] = useState(false);
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
   const [enlargedImage, setEnlargedImage] = useState(null);
+  useBodyScrollLock(!!selectedScreenshot || !!enlargedImage);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [userSearch, setUserSearch] = useState('');
   const [showUserDropdown, setShowUserDropdown] = useState(false);
