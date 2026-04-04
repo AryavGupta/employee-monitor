@@ -2,31 +2,18 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import Sidebar from './Sidebar';
+import { useUsers } from '../hooks/useUsers';
 import './UserActivity.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
 
 function UserActivity({ user, onLogout }) {
   const [loading, setLoading] = useState(true);
-  const [users, setUsers] = useState([]);
+  const { users } = useUsers();
   const [sessions, setSessions] = useState([]);
   const [activitySummary, setActivitySummary] = useState({});
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [selectedUserId, setSelectedUserId] = useState('');
-
-  const fetchUsers = useCallback(async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const response = await axios.get(`${API_URL}/api/users`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (response.data.success) {
-        setUsers(response.data.data);
-      }
-    } catch (error) {
-      console.error('Error fetching users:', error);
-    }
-  }, []);
 
   const fetchSessions = useCallback(async () => {
     setLoading(true);
@@ -65,8 +52,6 @@ function UserActivity({ user, onLogout }) {
       setLoading(false);
     }
   }, [selectedDate, selectedUserId]);
-
-  useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
   useEffect(() => {
     fetchSessions();

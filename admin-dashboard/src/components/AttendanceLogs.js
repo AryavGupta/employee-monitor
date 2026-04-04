@@ -2,13 +2,14 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { format, addDays } from 'date-fns';
 import Sidebar from './Sidebar';
+import { useUsers, useFilteredUsers } from '../hooks/useUsers';
 import './AttendanceLogs.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
 
 function AttendanceLogs({ user, onLogout }) {
   // User selection
-  const [users, setUsers] = useState([]);
+  const { users } = useUsers();
   const [selectedUserId, setSelectedUserId] = useState('');
   const [selectedUserName, setSelectedUserName] = useState('');
   const [userSearch, setUserSearch] = useState('');
@@ -38,7 +39,7 @@ function AttendanceLogs({ user, onLogout }) {
   const [exportingShift, setExportingShift] = useState(false);
 
   // Fetch users on mount
-  useEffect(() => { fetchUsers(); }, []);
+  // Users loaded via shared useUsers hook
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -50,18 +51,6 @@ function AttendanceLogs({ user, onLogout }) {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
-
-  const fetchUsers = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const res = await axios.get(`${API_URL}/api/users`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.data.success) setUsers(res.data.data);
-    } catch (err) {
-      console.error('Error fetching users:', err);
-    }
-  };
 
   // Fetch shift attendance
   const fetchShiftAttendance = useCallback(async () => {
@@ -262,10 +251,7 @@ function AttendanceLogs({ user, onLogout }) {
     return { type: 'none', value: '' };
   };
 
-  const filteredUsers = users.filter(u =>
-    u.full_name.toLowerCase().includes(userSearch.toLowerCase()) ||
-    u.email.toLowerCase().includes(userSearch.toLowerCase())
-  );
+  const filteredUsers = useFilteredUsers(users, userSearch);
 
   // Log summary stats
   const logSummary = {

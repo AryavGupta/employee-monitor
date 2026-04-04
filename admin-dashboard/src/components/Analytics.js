@@ -4,6 +4,7 @@ import { format, subDays, startOfDay, endOfDay } from 'date-fns';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { jsPDF } from 'jspdf';
 import Sidebar from './Sidebar';
+import { useUsers, useFilteredUsers } from '../hooks/useUsers';
 import './Analytics.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -88,7 +89,7 @@ const Icons = {
 
 function Analytics({ user, onLogout }) {
   const [loading, setLoading] = useState(false);
-  const [users, setUsers] = useState([]);
+  const { users } = useUsers();
   const [selectedUserId, setSelectedUserId] = useState('');
   const [selectedUserName, setSelectedUserName] = useState('');
   const [userSearch, setUserSearch] = useState('');
@@ -108,11 +109,6 @@ function Analytics({ user, onLogout }) {
   const [productivityData, setProductivityData] = useState([]);
   const [hourlyData, setHourlyData] = useState([]);
 
-  // Fetch users on mount
-  useEffect(() => {
-    fetchUsers();
-  }, []);
-
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -123,20 +119,6 @@ function Analytics({ user, onLogout }) {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const fetchUsers = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const response = await axios.get(`${API_URL}/api/users`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (response.data.success) {
-        setUsers(response.data.data);
-      }
-    } catch (error) {
-      console.error('Error fetching users:', error);
-    }
-  };
 
   const fetchAnalytics = useCallback(async () => {
     if (!selectedUserId) return;
@@ -362,10 +344,7 @@ function Analytics({ user, onLogout }) {
     window.URL.revokeObjectURL(url);
   };
 
-  const filteredUsers = users.filter(u =>
-    u.full_name.toLowerCase().includes(userSearch.toLowerCase()) ||
-    u.email.toLowerCase().includes(userSearch.toLowerCase())
-  );
+  const filteredUsers = useFilteredUsers(users, userSearch);
 
   return (
     <div className="app-layout">

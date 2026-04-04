@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import Sidebar from './Sidebar';
+import { useUsers, useFilteredUsers } from '../hooks/useUsers';
 import './Screenshots.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -18,8 +19,8 @@ const INTERVAL_OPTIONS = [
 ];
 
 function Screenshots({ user, onLogout }) {
+  const { users } = useUsers();
   const [screenshots, setScreenshots] = useState([]);
-  const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
   const [enlargedImage, setEnlargedImage] = useState(null);
@@ -37,17 +38,8 @@ function Screenshots({ user, onLogout }) {
     flagged: ''
   });
   const [stats, setStats] = useState(null);
-  const usersLoaded = useRef(false);
   const debounceTimer = useRef(null);
   const userDropdownRef = useRef(null);
-
-  // Fetch users only once on mount
-  useEffect(() => {
-    if (!usersLoaded.current) {
-      fetchUsers();
-      usersLoaded.current = true;
-    }
-  }, []);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -107,20 +99,6 @@ function Screenshots({ user, onLogout }) {
     if (newIndex >= 0 && newIndex < screenshots.length) {
       setCurrentIndex(newIndex);
       setSelectedScreenshot(screenshots[newIndex]);
-    }
-  };
-
-  const fetchUsers = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const response = await axios.get(`${API_URL}/api/users`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (response.data.success) {
-        setUsers(response.data.data);
-      }
-    } catch (error) {
-      console.error('Error fetching users:', error);
     }
   };
 
@@ -224,10 +202,7 @@ function Screenshots({ user, onLogout }) {
   // Legacy function for backward compatibility
   const getImageUrl = getThumbnailUrl;
 
-  const filteredUsers = users.filter(u =>
-    u.full_name.toLowerCase().includes(userSearch.toLowerCase()) ||
-    u.email.toLowerCase().includes(userSearch.toLowerCase())
-  );
+  const filteredUsers = useFilteredUsers(users, userSearch);
 
   return (
     <div className="app-layout">

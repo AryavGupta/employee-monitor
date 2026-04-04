@@ -77,6 +77,36 @@ router.get('/', authenticateToken, authorizeAdminOrManager, async (req, res) => 
   }
 });
 
+// Lightweight user list for dropdowns (no JOINs, minimal columns, cached response)
+router.get('/list', authenticateToken, async (req, res) => {
+  try {
+    const pool = req.app.locals.pool;
+    let query = `SELECT id, full_name, email FROM users WHERE is_active = true`;
+    const params = [];
+
+    if (req.user.role === 'team_manager') {
+      const managedTeamIds = await getManagedTeamIds(pool, req.user.userId);
+      if (managedTeamIds.length > 0) {
+        const placeholders = managedTeamIds.map((_, i) => `$${i + 1}`).join(', ');
+        query += ` AND team_id IN (${placeholders})`;
+        params.push(...managedTeamIds);
+      } else {
+        return res.json({ success: true, data: [] });
+      }
+    }
+
+    query += ` ORDER BY full_name ASC`;
+    const result = await pool.query(query, params);
+
+    // Cache for 5 minutes - user list rarely changes
+    res.set('Cache-Control', 'private, max-age=300');
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    console.error('Get users list error:', error);
+    res.status(500).json({ success: false, message: 'Failed to retrieve users list' });
+  }
+});
+
 // Get single user (admin, team manager for their team, or self)
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
