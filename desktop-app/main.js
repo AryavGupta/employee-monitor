@@ -931,7 +931,7 @@ function extractDomain(url) {
 // =====================================================
 
 // Extract URL from browser window title or using platform-specific methods
-async function extractBrowserUrl(appName, windowTitle) {
+async function extractBrowserUrl(appName, windowTitle, hwnd) {
   const browserPatterns = ['chrome', 'firefox', 'edge', 'msedge', 'brave', 'opera', 'safari', 'vivaldi'];
   const appNameLower = appName.toLowerCase();
 
@@ -944,7 +944,7 @@ async function extractBrowserUrl(appName, windowTitle) {
 
   // For Windows, try to get URL from browser using accessibility APIs
   if (os.platform() === 'win32') {
-    url = await getWindowsEdgeChromeUrl(appName);
+    url = await getWindowsEdgeChromeUrl(appName, hwnd);
   }
 
   // Fallback: try to parse URL from window title if it contains one
@@ -986,7 +986,7 @@ function getSafeProcessName(appName) {
 }
 
 // Windows-specific URL extraction for Chrome/Edge
-async function getWindowsEdgeChromeUrl(appName) {
+async function getWindowsEdgeChromeUrl(appName, hwnd) {
   return new Promise((resolve) => {
     // SECURITY: Only use whitelisted process names to prevent command injection
     const safeProcessName = getSafeProcessName(appName);
@@ -1000,7 +1000,8 @@ async function getWindowsEdgeChromeUrl(appName) {
       return;
     }
 
-    exec(`powershell -ExecutionPolicy Bypass -File "${browserUrlScriptPath}" -ProcessName "${safeProcessName}"`, { timeout: 5000 }, (error, stdout) => {
+    const safeHwnd = typeof hwnd === 'number' ? hwnd : 0;
+    exec(`powershell -ExecutionPolicy Bypass -File "${browserUrlScriptPath}" -ProcessName "${safeProcessName}" -Hwnd ${safeHwnd}`, { timeout: 5000 }, (error, stdout) => {
       if (error || !stdout.trim()) {
         resolve(null);
         return;
@@ -1232,48 +1233,114 @@ $pName = if ($process) { $process.ProcessName } else { "Unknown" }
 
 $filePath = ""
 if ($pName -eq "explorer" -and $hwnd -ne [IntPtr]::Zero) {
+    # Strategy 1: Shell.Application COM (classic Explorer windows)
     try {
         $shell = New-Object -ComObject Shell.Application
         foreach ($w in $shell.Windows()) {
-            if ($w.HWND -eq [long]$hwnd) {
-                $filePath = $w.Document.Folder.Self.Path
-                break
-            }
+            try {
+                if ($w.HWND -eq [long]$hwnd) {
+                    $filePath = $w.Document.Folder.Self.Path
+                    break
+                }
+            } catch {}
         }
-    } catch {}
+    } catch {
+        [Console]::Error.WriteLine("Shell.Application failed: $_")
+    }
+
+    # Strategy 2: UI Automation fallback (Win11 tabs, edge cases)
+    if (-not $filePath) {
+        try {
+            Add-Type -AssemblyName UIAutomationClient -ErrorAction SilentlyContinue
+            Add-Type -AssemblyName UIAutomationTypes -ErrorAction SilentlyContinue
+            $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+            $editCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Edit
+            )
+            $edits = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCond)
+            foreach ($edit in $edits) {
+                try {
+                    $name = $edit.Current.Name
+                    if ($name -match 'Address' -or $name -match 'path' -or $name -match 'breadcrumb') {
+                        $vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        if ($vp -and $vp.Current.Value) {
+                            $filePath = $vp.Current.Value
+                            break
+                        }
+                    }
+                } catch {}
+            }
+        } catch {
+            [Console]::Error.WriteLine("UIAutomation Explorer fallback failed: $_")
+        }
+    }
 }
 
 @{
     Title = $title.ToString()
     ProcessName = $pName
     FilePath = $filePath
+    HWND = $hwnd.ToInt64()
 } | ConvertTo-Json
 `);
 
   // Browser URL extraction script
   browserUrlScriptPath = path.join(tempDir, `em-browserurl-${process.pid}.ps1`);
   fs.writeFileSync(browserUrlScriptPath, `
-param([string]$ProcessName)
+param([string]$ProcessName, [long]$Hwnd = 0)
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
-$procs = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
-if ($procs) {
-    $proc = $procs | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-    if ($proc) {
-        $root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
-        $condition = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::Edit
-        )
-        $addressBar = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
-        if ($addressBar) {
-            $valuePattern = $addressBar.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-            if ($valuePattern) {
-                Write-Output $valuePattern.Current.Value
-            }
+$targetHwnd = [IntPtr]$Hwnd
+if ($targetHwnd -eq [IntPtr]::Zero) {
+    # Fallback: find process by name if HWND not provided
+    $procs = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
+    if ($procs) {
+        $proc = $procs | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+        if ($proc) { $targetHwnd = $proc.MainWindowHandle }
+    }
+}
+
+if ($targetHwnd -ne [IntPtr]::Zero) {
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($targetHwnd)
+    $editCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Edit
+    )
+    $edits = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCond)
+
+    $url = $null
+
+    # Strategy 1: Find the address bar by Name or AutomationId
+    foreach ($edit in $edits) {
+        $name = $edit.Current.Name
+        $aid = $edit.Current.AutomationId
+        if ($name -match 'Address' -or $name -match 'URL' -or $aid -match 'address' -or $aid -match 'url') {
+            try {
+                $vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                if ($vp -and $vp.Current.Value) {
+                    $url = $vp.Current.Value
+                    break
+                }
+            } catch {}
         }
     }
+
+    # Strategy 2: Fall back to first Edit with a URL-like value
+    if (-not $url) {
+        foreach ($edit in $edits) {
+            try {
+                $vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                if ($vp -and $vp.Current.Value -match '^(https?://|[a-zA-Z0-9][-a-zA-Z0-9]*\\.[a-zA-Z]{2,})') {
+                    $url = $vp.Current.Value
+                    break
+                }
+            } catch {}
+        }
+    }
+
+    if ($url) { Write-Output $url }
 }
 `);
 
@@ -1291,13 +1358,13 @@ async function trackActiveApplication() {
 
     if (platform === 'win32') {
       if (!activeWindowScriptPath) {
-        resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null });
+        resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
         return;
       }
 
       exec(`powershell -ExecutionPolicy Bypass -File "${activeWindowScriptPath}"`, { timeout: 5000 }, (error, stdout) => {
         if (error) {
-          resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null });
+          resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
           return;
         }
         try {
@@ -1305,10 +1372,11 @@ async function trackActiveApplication() {
           resolve({
             appName: result.ProcessName || 'Unknown',
             windowTitle: result.Title || 'Unknown',
-            filePath: result.FilePath || null
+            filePath: result.FilePath || null,
+            hwnd: typeof result.HWND === 'number' ? result.HWND : null
           });
         } catch (e) {
-          resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null });
+          resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
         }
       });
     } else if (platform === 'darwin') {
@@ -1587,7 +1655,7 @@ async function trackActivity() {
       currentUrl = 'file:///' + appInfo.filePath.replace(/\\/g, '/');
       currentDomain = 'local';
     } else if (teamSettings?.track_urls !== false) {
-      currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle);
+      currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle, appInfo.hwnd);
       if (currentUrl) {
         currentDomain = extractDomain(currentUrl);
       }
@@ -1728,7 +1796,7 @@ async function sendHeartbeat() {
     let currentUrl = null;
 
     if (teamSettings?.track_urls !== false) {
-      currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle);
+      currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle, appInfo.hwnd);
     }
 
     const idleSeconds = getSystemIdleTime();

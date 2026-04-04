@@ -47,3 +47,5 @@ temp/
 *.tmp
 tmpclaude-*
 .claude/
+
+.vercel

@@ -56,7 +56,8 @@
         }
       ],
       "icon": "desktop-app/assets/icon.ico",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "requestedExecutionLevel": "requireAdministrator"
     },
     "nsis": {
       "oneClick": false,
