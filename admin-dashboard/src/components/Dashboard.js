@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { format, formatDistanceToNow } from 'date-fns';
 import Sidebar from './Sidebar';
@@ -52,9 +52,12 @@ function Dashboard({ user, onLogout }) {
     return <span className={`status-badge ${s.className}`}>{s.label}</span>;
   };
 
-  const filteredEmployees = employees.filter(emp =>
-    emp.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    emp.email?.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredEmployees = useMemo(() =>
+    employees.filter(emp =>
+      emp.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      emp.email?.toLowerCase().includes(searchTerm.toLowerCase())
+    ),
+    [employees, searchTerm]
   );
 
   if (loading) {

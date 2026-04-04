@@ -88,7 +88,7 @@ function Teams({ user, onLogout }) {
   // Initial load - restore selected team from storage
   useEffect(() => {
     const initializeData = async () => {
-      const [teamsData] = await Promise.all([fetchTeams(), fetchAllUsers()]);
+      const [teamsData] = await Promise.all([fetchTeams(), fetchAllUsers(), fetchUnassignedUsers()]);
 
       // Restore selected team if stored
       if (!initialLoadDone.current) {
@@ -129,10 +129,11 @@ function Teams({ user, onLogout }) {
       if (response.data.success) {
         setEditingTeam(null);
         setFormData({ name: '', description: '', manager_id: '' });
-        fetchTeams();
+        const promises = [fetchTeams()];
         if (selectedTeam?.id === editingTeam.id) {
-          fetchTeamDetails(editingTeam.id);
+          promises.push(fetchTeamDetails(editingTeam.id));
         }
+        await Promise.all(promises);
       }
     } catch (error) {
       alert(error.response?.data?.message || 'Failed to update team');
@@ -202,9 +203,12 @@ function Teams({ user, onLogout }) {
         { user_id: userId },
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      fetchTeamDetails(selectedTeam.id);
-      fetchUnassignedUsers();
-      fetchTeams();
+      // Parallel refetch instead of 3 sequential calls
+      await Promise.all([
+        fetchTeamDetails(selectedTeam.id),
+        fetchUnassignedUsers(),
+        fetchTeams()
+      ]);
     } catch (error) {
       alert(error.response?.data?.message || 'Failed to add member');
     }
@@ -217,8 +221,11 @@ function Teams({ user, onLogout }) {
       await axios.delete(`${API_URL}/api/teams/${selectedTeam.id}/members/${userId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      fetchTeamDetails(selectedTeam.id);
-      fetchTeams();
+      // Parallel refetch instead of 2 sequential calls
+      await Promise.all([
+        fetchTeamDetails(selectedTeam.id),
+        fetchTeams()
+      ]);
     } catch (error) {
       alert(error.response?.data?.message || 'Failed to remove member');
     }

@@ -1,16 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import axios from 'axios';
 import Login from './components/Login';
-import Dashboard from './components/Dashboard';
-import Screenshots from './components/Screenshots';
-import Users from './components/Users';
-import Analytics from './components/Analytics';
-import UserActivity from './components/UserActivity';
-import Teams from './components/Teams';
-import AttendanceLogs from './components/AttendanceLogs';
-import Profile from './components/Profile';
 import './App.css';
+
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const Screenshots = lazy(() => import('./components/Screenshots'));
+const Users = lazy(() => import('./components/Users'));
+const Analytics = lazy(() => import('./components/Analytics'));
+const UserActivity = lazy(() => import('./components/UserActivity'));
+const Teams = lazy(() => import('./components/Teams'));
+const AttendanceLogs = lazy(() => import('./components/AttendanceLogs'));
+const Profile = lazy(() => import('./components/Profile'));
 
 const API_URL = process.env.REACT_APP_API_URL || '';
 
@@ -93,6 +94,7 @@ function App() {
   return (
     <Router>
       <div className="App">
+        <Suspense fallback={<div className="loading-screen"><div className="spinner"></div></div>}>
         <Routes>
           <Route 
             path="/login" 
@@ -171,6 +173,7 @@ function App() {
             element={<Navigate to={isAuthenticated ? "/dashboard" : "/login"} />}
           />
         </Routes>
+        </Suspense>
       </div>
     </Router>
   );

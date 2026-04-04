@@ -12,15 +12,14 @@ router.get('/', authenticateToken, authorizeAdminOrManager, async (req, res) => 
         t.id, t.name, t.description, t.manager_id, t.is_active, t.created_at, t.updated_at,
         m.full_name as manager_name,
         COUNT(DISTINCT u.id) as member_count,
-        COALESCE(
-          (SELECT COUNT(*) FROM user_presence up
-           JOIN users u2 ON up.user_id = u2.id
-           WHERE u2.team_id = t.id
-             AND up.status IN ('online', 'idle')
-             AND up.last_heartbeat > NOW() - INTERVAL '90 seconds'), 0
-        ) as online_count
+        COUNT(DISTINCT CASE
+          WHEN up.status IN ('online', 'idle')
+          AND up.last_heartbeat > NOW() - INTERVAL '90 seconds'
+          THEN u.id
+        END) as online_count
       FROM teams t
       LEFT JOIN users u ON t.id = u.team_id AND u.is_active = true
+      LEFT JOIN user_presence up ON u.id = up.user_id
       LEFT JOIN users m ON t.manager_id = m.id
     `;
 

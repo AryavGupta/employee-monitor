@@ -108,17 +108,18 @@ router.get('/summary', authenticateToken, authorizeAdminOrManager, async (req, r
   try {
     const pool = req.app.locals.pool;
 
-    let summaryQuery = `
+    // Single query instead of 2 separate queries
+    let query = `
       SELECT
-        COUNT(CASE WHEN last_heartbeat > NOW() - INTERVAL '90 seconds' AND status = 'online' THEN 1 END) as online_count,
-        COUNT(CASE WHEN last_heartbeat > NOW() - INTERVAL '90 seconds' AND status = 'idle' THEN 1 END) as idle_count,
-        COUNT(CASE WHEN last_heartbeat <= NOW() - INTERVAL '90 seconds' OR status = 'offline' THEN 1 END) as offline_count
+        COUNT(CASE WHEN p.last_heartbeat > NOW() - INTERVAL '90 seconds' AND p.status = 'online' THEN 1 END) as online_count,
+        COUNT(CASE WHEN p.last_heartbeat > NOW() - INTERVAL '90 seconds' AND p.status = 'idle' THEN 1 END) as idle_count,
+        COUNT(CASE WHEN p.last_heartbeat <= NOW() - INTERVAL '90 seconds' OR p.status = 'offline' THEN 1 END) as offline_count,
+        (SELECT COUNT(*) FROM users WHERE is_active = true{TOTAL_FILTER}) as total_users
       FROM user_presence p
       JOIN users u ON p.user_id = u.id
       WHERE u.is_active = true
     `;
 
-    let totalQuery = `SELECT COUNT(*) as total FROM users WHERE is_active = true`;
     const params = [];
 
     // Team managers only see their team stats
@@ -126,8 +127,8 @@ router.get('/summary', authenticateToken, authorizeAdminOrManager, async (req, r
       const managedTeamIds = await getManagedTeamIds(pool, req.user.userId);
       if (managedTeamIds.length > 0) {
         const placeholders = managedTeamIds.map((_, i) => `$${i + 1}`).join(', ');
-        summaryQuery += ` AND u.team_id IN (${placeholders})`;
-        totalQuery += ` AND team_id IN (${placeholders})`;
+        query += ` AND u.team_id IN (${placeholders})`;
+        query = query.replace('{TOTAL_FILTER}', ` AND team_id IN (${placeholders})`);
         params.push(...managedTeamIds);
       } else {
         return res.json({
@@ -135,10 +136,11 @@ router.get('/summary', authenticateToken, authorizeAdminOrManager, async (req, r
           data: { online: 0, idle: 0, offline: 0, total_users: 0 }
         });
       }
+    } else {
+      query = query.replace('{TOTAL_FILTER}', '');
     }
 
-    const result = await pool.query(summaryQuery, params);
-    const totalResult = await pool.query(totalQuery, params);
+    const result = await pool.query(query, params);
 
     res.json({
       success: true,
@@ -146,7 +148,7 @@ router.get('/summary', authenticateToken, authorizeAdminOrManager, async (req, r
         online: parseInt(result.rows[0]?.online_count || 0),
         idle: parseInt(result.rows[0]?.idle_count || 0),
         offline: parseInt(result.rows[0]?.offline_count || 0),
-        total_users: parseInt(totalResult.rows[0]?.total || 0)
+        total_users: parseInt(result.rows[0]?.total_users || 0)
       }
     });
   } catch (error) {
