@@ -25,19 +25,17 @@
 }
 
 .sidebar-logo {
-  width: 36px;
-  height: 36px;
-  background: white;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .sidebar-logo svg {
-  width: 20px;
-  height: 20px;
-  color: #0f172a;
+  width: 24px;
+  height: 24px;
+  color: #3b82f6;
 }
 
 .sidebar-brand h2 {
@@ -47,10 +45,7 @@
 }
 
 .sidebar-header .version {
-  font-size: 11px;
-  color: #64748b;
-  margin-top: 4px;
-  margin-left: 48px;
+  display: none;
 }
 
 /* Navigation */
