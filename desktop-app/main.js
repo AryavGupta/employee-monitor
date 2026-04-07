@@ -453,6 +453,7 @@ function setupPowerMonitorHandlers() {
 
       // If sleep was long (>5 min), the server may have auto-closed the session.
       // Check and start a new session if needed.
+      // Wrapped in try/catch so interval restart ALWAYS happens below.
       if (sleepDuration > 300) {
         console.log('Long sleep detected, checking if session is still active...');
         try {
@@ -461,25 +462,31 @@ function setupPowerMonitorHandlers() {
             { headers: { Authorization: `Bearer ${CONFIG.USER_TOKEN}` }, timeout: 5000 }
           );
           if (!checkRes.data.data) {
-            // Session was closed server-side during sleep — start a new one
             console.log('Session was closed during sleep, starting new session...');
             totalActiveSeconds = 0;
             totalIdleSeconds = 0;
             await startWorkSession();
           }
         } catch (e) {
-          // Network not ready yet after wake — start new session to be safe
-          console.log('Could not check session status, starting new session:', e.message);
-          totalActiveSeconds = 0;
-          totalIdleSeconds = 0;
-          await startWorkSession();
+          console.log('Could not check/start session after wake:', e.message);
+          try {
+            totalActiveSeconds = 0;
+            totalIdleSeconds = 0;
+            await startWorkSession();
+          } catch (e2) {
+            console.error('Failed to start new session after wake:', e2.message);
+            // Continue anyway — intervals must restart even without a session
+          }
         }
       }
 
-      // Restart intervals
+      // Restart intervals — MUST always run regardless of session check above
       screenshotInterval = setInterval(captureScreenshot, CONFIG.SCREENSHOT_INTERVAL);
       activityInterval = setInterval(trackActivity, CONFIG.ACTIVITY_INTERVAL);
       heartbeatInterval = setInterval(sendHeartbeat, CONFIG.HEARTBEAT_INTERVAL);
+
+      // Restart keyboard monitor (may have died during sleep)
+      try { startKeyboardMonitor(); } catch (e) { /* non-critical */ }
 
       // Send immediate heartbeat to mark user as online again
       sendHeartbeat();
@@ -1676,30 +1683,63 @@ async function trackActivity() {
     return;
   }
 
+  // Calculate duration FIRST — this must always succeed so we never lose time
+  const now = Date.now();
+  const durationSeconds = Math.round((now - lastActivityTime) / 1000);
+  lastActivityTime = now;
+
+  // Get idle status — wrap in try/catch since powerMonitor can fail after wake
+  let idleTime = 0;
+  let isIdle = false;
   try {
-    const idleTime = getSystemIdleTime();
-    const isIdle = idleTime >= CONFIG.IDLE_THRESHOLD;
+    idleTime = getSystemIdleTime();
+    isIdle = idleTime >= CONFIG.IDLE_THRESHOLD;
+  } catch (e) {
+    console.error('Error getting idle time:', e.message);
+  }
 
-    // Get active application info
-    const appInfo = await trackActiveApplication();
+  // Update totals (always runs)
+  if (isIdle) {
+    totalIdleSeconds += durationSeconds;
+    if (!isCurrentlyIdle) {
+      isCurrentlyIdle = true;
+      console.log('User went idle');
+    }
+  } else {
+    totalActiveSeconds += durationSeconds;
+    if (isCurrentlyIdle) {
+      isCurrentlyIdle = false;
+      console.log('User became active');
+    }
+  }
 
-    // Track keyboard activity - use real monitor if available, else infer
-    let kbData = null;
+  // Get app info, keyboard, mouse, URL — all optional, failures don't lose the log
+  let appInfo = { appName: 'Unknown', windowTitle: 'Unknown', filePath: null, hwnd: null };
+  let kbData = null;
+  let mouseDistance = 0;
+  let currentUrl = null;
+  let currentDomain = null;
+
+  try {
+    appInfo = await trackActiveApplication();
+  } catch (e) {
+    console.error('Error tracking application:', e.message);
+  }
+
+  try {
     if (keyboardMonitorProcess) {
       kbData = readKeyboardStats();
       keyboardEvents = kbData.keystrokes;
     } else {
       trackKeyboardActivity();
     }
+  } catch (e) { /* non-critical */ }
 
-    // Track mouse movement
-    const mouseDistance = trackMouseMovement();
+  try {
+    mouseDistance = trackMouseMovement();
+  } catch (e) { /* non-critical */ }
 
-    // Try to extract URL/file path
-    let currentUrl = null;
-    let currentDomain = null;
-
-    // For Explorer windows, capture the directory path
+  try {
     if (appInfo.filePath) {
       currentUrl = 'file:///' + appInfo.filePath.replace(/\\/g, '/');
       currentDomain = 'local';
@@ -1709,64 +1749,58 @@ async function trackActivity() {
         currentDomain = extractDomain(currentUrl);
       }
     }
+  } catch (e) {
+    console.error('Error extracting URL:', e.message);
+  }
 
-    // Calculate duration since last check
-    const now = Date.now();
-    const durationSeconds = Math.round((now - lastActivityTime) / 1000);
-    lastActivityTime = now;
+  // Check working hours for overtime detection
+  let isOvertime = false;
+  let shiftDate = null;
+  try {
+    const wh = getWorkingHoursStatus();
+    isOvertime = wh.isOvertime;
+    shiftDate = wh.shiftDate;
+  } catch (e) { /* non-critical */ }
 
-    // Update totals
-    if (isIdle) {
-      totalIdleSeconds += durationSeconds;
-      if (!isCurrentlyIdle) {
-        isCurrentlyIdle = true;
-        console.log('User went idle');
-      }
-    } else {
-      totalActiveSeconds += durationSeconds;
-      if (isCurrentlyIdle) {
-        isCurrentlyIdle = false;
-        console.log('User became active');
-      }
+  // Create activity log entry — always succeeds
+  const activity = {
+    activityType: isIdle ? 'idle' : 'active',
+    applicationName: appInfo.appName,
+    windowTitle: appInfo.windowTitle,
+    url: currentUrl,
+    domain: currentDomain,
+    isIdle: isIdle,
+    durationSeconds: durationSeconds,
+    keyboardEvents: keyboardEvents,
+    mouseEvents: mouseEvents,
+    mouseDistance: mouseDistance,
+    isOvertime: isOvertime,
+    shiftDate: shiftDate,
+    metadata: {
+      idleTime: idleTime,
+      timestamp: new Date().toISOString(),
+      maxKeyRepeat: kbData?.maxRepeat || 0
     }
+  };
 
-    // Check working hours for overtime detection
-    const { isOvertime, shiftDate } = getWorkingHoursStatus();
+  // Reset counters
+  keyboardEvents = 0;
+  mouseEvents = 0;
 
-    // Create activity log entry
-    const activity = {
-      activityType: isIdle ? 'idle' : 'active',
-      applicationName: appInfo.appName,
-      windowTitle: appInfo.windowTitle,
-      url: currentUrl,
-      domain: currentDomain,
-      isIdle: isIdle,
-      durationSeconds: durationSeconds,
-      keyboardEvents: keyboardEvents,
-      mouseEvents: mouseEvents,
-      mouseDistance: mouseDistance,
-      isOvertime: isOvertime,
-      shiftDate: shiftDate,
-      metadata: {
-        idleTime: idleTime,
-        timestamp: new Date().toISOString(),
-        maxKeyRepeat: kbData?.maxRepeat || 0
-      }
-    };
+  // Add to buffer
+  activityBuffer.push(activity);
 
-    // Reset counters
-    keyboardEvents = 0;
-    mouseEvents = 0;
-
-    // Add to buffer
-    activityBuffer.push(activity);
-
-    // Send batch if buffer is full (every 6 entries = 1 minute worth)
-    if (activityBuffer.length >= 6) {
+  // Send batch if buffer is full (every 6 entries = 1 minute worth)
+  if (activityBuffer.length >= 6) {
+    try {
       await sendActivityBatch();
+    } catch (e) {
+      console.error('Error sending activity batch:', e.message);
     }
+  }
 
-    // Update UI
+  // Update UI
+  try {
     if (mainWindow && mainWindow.webContents) {
       mainWindow.webContents.send('activity-update', {
         isIdle,
@@ -1778,10 +1812,7 @@ async function trackActivity() {
         totalIdleSeconds
       });
     }
-
-  } catch (error) {
-    console.error('Error tracking activity:', error);
-  }
+  } catch (e) { /* UI update non-critical */ }
 }
 
 // =====================================================

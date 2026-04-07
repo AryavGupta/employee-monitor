@@ -1,6 +1,6 @@
 {
   "name": "employee-monitoring-system",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Desktop employee monitoring application with screenshot capture",
   "main": "desktop-app/main.js",
   "scripts": {
@@ -56,8 +56,7 @@
         }
       ],
       "icon": "desktop-app/assets/icon.ico",
-      "signAndEditExecutable": false,
-      "requestedExecutionLevel": "requireAdministrator"
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
