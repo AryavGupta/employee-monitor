@@ -401,6 +401,9 @@ router.get('/dashboard-summary', authenticateToken, async (req, res) => {
     const pool = req.app.locals.pool;
     const { startDate, endDate, userId, teamId } = req.query;
 
+    // Non-admin users can only view their own data
+    const targetUserId = req.user.role === 'admin' ? userId : req.user.userId;
+
     const today = new Date().toISOString().split('T')[0];
     const start = startDate || today;
     const end = endDate || today + 'T23:59:59';
@@ -416,8 +419,8 @@ router.get('/dashboard-summary', authenticateToken, async (req, res) => {
           COALESCE(SUM(a.keyboard_events), 0) as total_keyboard_events,
           COALESCE(SUM(a.mouse_events), 0) as total_mouse_events
         FROM activity_logs a
-        ${userId ? 'WHERE a.user_id = $3' : ''}
-        ${!userId ? 'WHERE' : 'AND'} a.timestamp >= $1 AND a.timestamp <= $2
+        ${targetUserId ? 'WHERE a.user_id = $3' : ''}
+        ${!targetUserId ? 'WHERE' : 'AND'} a.timestamp >= $1 AND a.timestamp <= $2
       ),
       screenshot_stats AS (
         SELECT
@@ -425,7 +428,7 @@ router.get('/dashboard-summary', authenticateToken, async (req, res) => {
           COUNT(CASE WHEN is_flagged = true THEN 1 END) as flagged_screenshots
         FROM screenshots
         WHERE captured_at >= $1 AND captured_at <= $2
-        ${userId ? 'AND user_id = $3' : ''}
+        ${targetUserId ? 'AND user_id = $3' : ''}
       ),
       alert_stats AS (
         SELECT
@@ -433,14 +436,14 @@ router.get('/dashboard-summary', authenticateToken, async (req, res) => {
           COUNT(CASE WHEN is_read = false THEN 1 END) as unread_alerts
         FROM alerts
         WHERE created_at >= $1 AND created_at <= $2
-        ${userId ? 'AND user_id = $3' : ''}
+        ${targetUserId ? 'AND user_id = $3' : ''}
       )
       SELECT
         a.*, s.total_screenshots, s.flagged_screenshots, al.total_alerts, al.unread_alerts
       FROM activity_stats a, screenshot_stats s, alert_stats al
     `;
 
-    const params = userId ? [start, end, userId] : [start, end];
+    const params = targetUserId ? [start, end, targetUserId] : [start, end];
     const result = await pool.query(combinedQuery, params);
 
     const stats = result.rows[0];

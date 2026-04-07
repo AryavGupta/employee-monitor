@@ -42,7 +42,10 @@ const CONFIG = {
   USER_ID: null,
   USER_DATA: null,
   MAX_RETRIES: 3,
-  RETRY_DELAY: 1000 // Base delay in ms, will be exponentially increased
+  RETRY_DELAY: 1000, // Base delay in ms, will be exponentially increased
+  WORKING_DAYS: [1, 2, 3, 4, 5], // Default Mon-Fri, overridden by team settings
+  WORKING_HOURS_START: null,
+  WORKING_HOURS_END: null
 };
 
 // Retry wrapper for API calls with exponential backoff
