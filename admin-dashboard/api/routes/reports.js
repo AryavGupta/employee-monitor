@@ -590,6 +590,11 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
     const lastLogout = lastSession?.end_time || null;
     const hasActiveSession = sessions.some(s => s.effective_status === 'active' || s.effective_status === 'idle');
 
+    // Total hours = wall-clock time from first login to last logout (or now if active)
+    const totalWallClock = firstLogin
+      ? Math.floor(((hasActiveSession ? new Date() : new Date(lastLogout || firstLogin)) - new Date(firstLogin)) / 1000)
+      : 0;
+
     res.json({
       success: true,
       data: {
@@ -608,7 +613,9 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
           id: s.id,
           start_time: s.start_time,
           end_time: s.end_time,
-          duration_seconds: parseInt(s.duration_seconds) || 0,
+          duration_seconds: s.end_time
+            ? (parseInt(s.duration_seconds) || Math.floor((new Date(s.end_time) - new Date(s.start_time)) / 1000))
+            : Math.floor((Date.now() - new Date(s.start_time).getTime()) / 1000),
           active_seconds: parseInt(s.active_seconds) || 0,
           idle_seconds: parseInt(s.idle_seconds) || 0,
           effective_status: s.effective_status,
@@ -618,7 +625,7 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
           first_login: firstLogin,
           last_logout: lastLogout,
           is_active: hasActiveSession,
-          total_seconds: parseInt(activity.total_seconds) || 0,
+          total_seconds: totalWallClock,
           active_seconds: parseInt(activity.active_seconds) || 0,
           idle_seconds: parseInt(activity.idle_seconds) || 0,
           session_count: sessions.length,
@@ -744,8 +751,8 @@ router.get('/shift-attendance/export', authenticateToken, async (req, res) => {
           }
         }
 
-        const totalSecs = activeSeconds + idleSeconds;
-        const workingHours = activeSeconds;
+        const totalSecs = Math.floor((sessionEnd - sessionStart) / 1000);
+        const workingHours = Math.max(totalSecs - idleSeconds, 0);
 
         rows.push({
           user_name: userInfo.full_name,

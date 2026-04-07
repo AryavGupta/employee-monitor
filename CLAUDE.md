@@ -361,6 +361,13 @@ Before finalizing any change, verify:
 
 *No active issues at this time.*
 
+### RESOLVED — April 2026 (Total Hours)
+
+* **Shift attendance "Total Hours" showed activity-log sum instead of wall-clock time** (April 2026): The `/api/reports/shift-attendance` endpoint computed `total_seconds` as `SUM(duration_seconds)` from `activity_logs` (i.e. `active + idle`). This is much less than wall-clock time since activity logs don't cover every second. Login 12:58 PM → Logout 5:00 PM showed 1h 32m instead of 4h 2m.
+  * **Fix**: Changed `total_seconds` to wall-clock: `lastLogout (or now if active) - firstLogin`. Active/Idle remain from `activity_logs` (correct). Also fixed session `duration_seconds` to compute dynamically for active sessions (was showing 0h 0m). Fixed CSV export `total_hours` to use wall-clock per session (`sessionEnd - sessionStart`).
+  * **Affected files**: `admin-dashboard/api/routes/reports.js` (shift-attendance endpoint + export endpoint)
+  * **Prevention**: "Total Hours" in attendance context means wall-clock time at work (login to logout), not sum of tracked activity. Activity-log sums are for Active/Idle breakdown only.
+
 ### RESOLVED — April 2026 (CSV Export)
 
 * **Shift attendance export mixed wall-clock and activity-log data sources** (April 2026): The `/api/reports/shift-attendance/export` endpoint calculated `Total Hours` from session wall-clock time (`session.duration_seconds` or `end_time - start_time`) but `Active Time` and `Idle Time` from `activity_logs`. Since activity logs don't cover every second of wall-clock time (gaps from startup, between checks), `Active + Idle != Total`. `Working Hours` was `Total - Idle` which mixed the two sources, producing wrong values.
