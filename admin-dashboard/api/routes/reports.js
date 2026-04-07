@@ -627,7 +627,7 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
           is_active: hasActiveSession,
           total_seconds: totalWallClock,
           active_seconds: parseInt(activity.active_seconds) || 0,
-          idle_seconds: parseInt(activity.idle_seconds) || 0,
+          idle_seconds: Math.max(totalWallClock - (parseInt(activity.active_seconds) || 0), 0),
           session_count: sessions.length,
           activity_count: parseInt(activity.activity_count) || 0
         }
