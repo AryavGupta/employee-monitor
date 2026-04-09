@@ -9,7 +9,9 @@
     "start:frontend": "cd admin-dashboard && npm start",
     "dev:backend": "nodemon backend/server.js",
     "build:desktop": "electron-builder --win",
-    "build:desktop:dir": "electron-builder --win --dir"
+    "build:desktop:dir": "electron-builder --win --dir",
+    "build:linux": "electron-builder --linux",
+    "build:linux:dir": "electron-builder --linux --dir"
   },
   "keywords": [
     "employee-monitoring",
@@ -72,6 +74,21 @@
     },
     "portable": {
       "artifactName": "EmployeeMonitor-Portable-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        { "target": "deb", "arch": ["x64"] },
+        { "target": "AppImage", "arch": ["x64"] }
+      ],
+      "icon": "desktop-app/assets/icon.png",
+      "category": "Utility",
+      "desktop": {
+        "StartupWMClass": "employee-monitoring-system"
+      }
+    },
+    "deb": {
+      "depends": ["xdotool", "libxss1", "xinput"],
+      "artifactName": "EmployeeMonitor-${version}.${ext}"
     }
   },
   "dependencies": {

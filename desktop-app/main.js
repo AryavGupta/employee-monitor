@@ -3,7 +3,7 @@ const path = require('path');
 const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
-const { exec, spawn } = require('child_process');
+const { exec, execSync, spawn } = require('child_process');
 
 // Load environment variables from .env file if exists
 try {
@@ -265,6 +265,28 @@ function updateTrayMenu() {
 app.on('ready', async () => {
   console.log('Starting Employee Monitor...');
   console.log('API URL:', CONFIG.API_URL);
+  console.log('Platform:', os.platform());
+
+  // Linux: Check X11 and required dependencies before anything else
+  if (os.platform() === 'linux') {
+    const sessionType = process.env.XDG_SESSION_TYPE || '';
+    if (sessionType === 'wayland') {
+      dialog.showErrorBox('Unsupported Display Server',
+        'Employee Monitor requires X11. You are running Wayland.\n\n' +
+        'To switch: Log out → click the gear icon on the login screen → select "Ubuntu on Xorg" → log in.');
+      app.quit();
+      return;
+    }
+
+    try {
+      execSync('which xdotool', { stdio: 'ignore' });
+    } catch (e) {
+      dialog.showErrorBox('Missing Dependency',
+        'xdotool is required but not installed.\n\nInstall with:\n  sudo apt install xdotool');
+      app.quit();
+      return;
+    }
+  }
 
   // Initialize PowerShell tracking scripts (must be before any tracking starts)
   initTrackingScripts();
@@ -662,6 +684,23 @@ function setupAutoLaunch() {
   } catch (error) {
     console.log('Error setting auto-launch:', error.message);
   }
+
+  // Linux: ensure .desktop file in autostart as fallback
+  if (os.platform() === 'linux') {
+    try {
+      const autostartDir = path.join(os.homedir(), '.config', 'autostart');
+      const desktopFile = path.join(autostartDir, 'employee-monitor.desktop');
+      if (!fs.existsSync(desktopFile)) {
+        if (!fs.existsSync(autostartDir)) fs.mkdirSync(autostartDir, { recursive: true });
+        fs.writeFileSync(desktopFile,
+          `[Desktop Entry]\nType=Application\nName=Employee Monitor\nExec=${process.execPath}\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\nComment=Employee monitoring system\n`
+        );
+        console.log('Linux autostart .desktop file created');
+      }
+    } catch (e) {
+      console.error('Failed to create Linux autostart entry:', e.message);
+    }
+  }
 }
 
 // IPC Handlers
@@ -990,6 +1029,29 @@ function extractDomain(url) {
 // =====================================================
 
 // Extract URL from browser window title or using platform-specific methods
+// Linux-specific URL extraction using xdotool + xprop
+async function getLinuxBrowserUrl(appName) {
+  return new Promise((resolve) => {
+    exec('xdotool getactivewindow', { timeout: 3000 }, (err, wid) => {
+      if (err || !wid.trim()) return resolve(null);
+      const windowId = wid.trim();
+
+      exec(`xprop -id ${windowId} _NET_WM_NAME`, { timeout: 3000 }, (err2, stdout) => {
+        if (err2) return resolve(null);
+        const match = stdout.match(/= "(.*)"$/);
+        if (!match) return resolve(null);
+        const fullTitle = match[1];
+
+        // Parse URL from title if present
+        const urlMatch = fullTitle.match(/https?:\/\/[^\s]+/);
+        if (urlMatch) return resolve(urlMatch[0]);
+
+        resolve(null);
+      });
+    });
+  });
+}
+
 async function extractBrowserUrl(appName, windowTitle, hwnd) {
   const browserPatterns = ['chrome', 'firefox', 'edge', 'msedge', 'brave', 'opera', 'safari', 'vivaldi'];
   const appNameLower = appName.toLowerCase();
@@ -1001,9 +1063,11 @@ async function extractBrowserUrl(appName, windowTitle, hwnd) {
   // Many browsers show "Page Title - Browser Name" or "Page Title - URL - Browser"
   let url = null;
 
-  // For Windows, try to get URL from browser using accessibility APIs
+  // Platform-specific URL extraction
   if (os.platform() === 'win32') {
     url = await getWindowsEdgeChromeUrl(appName, hwnd);
+  } else if (os.platform() === 'linux') {
+    url = await getLinuxBrowserUrl(appName);
   }
 
   // Fallback: try to parse URL from window title if it contains one
@@ -1465,17 +1529,26 @@ async function trackActiveApplication() {
         });
       });
     } else {
-      // Linux: Use xdotool
+      // Linux: Use xdotool + detect file manager paths
       exec('xdotool getactivewindow getwindowname && xdotool getactivewindow getwindowpid | xargs -I {} ps -p {} -o comm=', (error, stdout) => {
         if (error) {
-          resolve({ appName: 'Unknown', windowTitle: 'Unknown' });
+          resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
           return;
         }
         const lines = stdout.trim().split('\n');
-        resolve({
-          appName: lines[1] || 'Unknown',
-          windowTitle: lines[0] || 'Unknown'
-        });
+        const appName = lines[1] || 'Unknown';
+        const windowTitle = lines[0] || 'Unknown';
+        let filePath = null;
+
+        // Detect file manager paths from window title
+        const fileManagers = ['nautilus', 'dolphin', 'thunar', 'nemo', 'pcmanfm', 'caja', 'files'];
+        if (fileManagers.some(fm => appName.toLowerCase().includes(fm))) {
+          if (windowTitle.startsWith('/')) {
+            filePath = windowTitle;
+          }
+        }
+
+        resolve({ appName, windowTitle, filePath, hwnd: null });
       });
     }
   });
@@ -1549,8 +1622,76 @@ function trackKeyboardActivity() {
 // Real Keyboard Monitoring (Windows Low-Level Hook)
 // =====================================================
 
+// Linux keyboard monitor using xinput
+function startLinuxKeyboardMonitor() {
+  if (os.platform() !== 'linux' || keyboardMonitorProcess) return;
+
+  try {
+    const devices = execSync('xinput list --short', { timeout: 5000 }).toString();
+    // Find keyboard device - look for "keyboard" in device name, skip virtual/power/video
+    const lines = devices.split('\n');
+    let kbId = null;
+    for (const line of lines) {
+      if (line.toLowerCase().includes('keyboard') &&
+          !line.toLowerCase().includes('virtual') &&
+          !line.toLowerCase().includes('power') &&
+          !line.toLowerCase().includes('video')) {
+        const idMatch = line.match(/id=(\d+)/);
+        if (idMatch) { kbId = idMatch[1]; break; }
+      }
+    }
+    if (!kbId) {
+      console.log('No keyboard device found for monitoring');
+      return;
+    }
+
+    console.log(`Starting Linux keyboard monitor on device ${kbId}`);
+    keyboardMonitorProcess = spawn('xinput', ['test', kbId]);
+
+    let keyCount = 0;
+    let lastKey = '';
+    let repeatCount = 0;
+    let maxRepeat = 0;
+
+    keyboardMonitorProcess.stdout.on('data', (data) => {
+      const dataLines = data.toString().split('\n');
+      for (const l of dataLines) {
+        if (l.includes('key press')) {
+          keyCount++;
+          const key = l.trim();
+          if (key === lastKey) {
+            repeatCount++;
+            if (repeatCount > maxRepeat) maxRepeat = repeatCount;
+          } else {
+            repeatCount = 1;
+            lastKey = key;
+          }
+        }
+      }
+    });
+
+    keyboardMonitorProcess.on('error', (e) => {
+      console.error('Linux keyboard monitor error:', e.message);
+      keyboardMonitorProcess = null;
+    });
+    keyboardMonitorProcess.on('exit', () => { keyboardMonitorProcess = null; });
+
+    // Override readKeyboardStats for Linux
+    readKeyboardStats = () => {
+      const result = { keystrokes: keyCount, maxRepeat };
+      keyCount = 0;
+      maxRepeat = 0;
+      return result;
+    };
+  } catch (e) {
+    console.error('Failed to start Linux keyboard monitor:', e.message);
+  }
+}
+
 function startKeyboardMonitor() {
-  if (os.platform() !== 'win32' || keyboardMonitorProcess) return;
+  if (keyboardMonitorProcess) return;
+  if (os.platform() === 'linux') return startLinuxKeyboardMonitor();
+  if (os.platform() !== 'win32') return;
 
   try {
     const scriptPath = path.join(os.tmpdir(), `em-kb-${process.pid}.ps1`);
@@ -1647,12 +1788,13 @@ public class KBMon {
   }
 }
 
-function readKeyboardStats() {
+// Declared as let so Linux keyboard monitor can override it
+let readKeyboardStats = function() {
   const result = { keystrokes: pendingKeystrokes, maxRepeat: pendingMaxRepeat };
   pendingKeystrokes = 0;
   pendingMaxRepeat = 0;
   return result;
-}
+};
 
 function stopKeyboardMonitor() {
   if (keyboardMonitorProcess) {
