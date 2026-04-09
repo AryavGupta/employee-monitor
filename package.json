@@ -2,6 +2,10 @@
   "name": "employee-monitoring-system",
   "version": "1.1.0",
   "description": "Desktop employee monitoring application with screenshot capture",
+  "author": {
+    "name": "Aryav Gupta",
+    "email": "aryavgupta2005@gmail.com"
+  },
   "main": "desktop-app/main.js",
   "scripts": {
     "start:desktop": "electron desktop-app/main.js",
@@ -24,6 +28,7 @@
     "appId": "com.employeemonitor.app",
     "productName": "Employee Monitor",
     "copyright": "Copyright (c) 2024",
+    "npmRebuild": false,
     "directories": {
       "output": "dist",
       "buildResources": "desktop-app/assets"
@@ -88,7 +93,8 @@
     },
     "deb": {
       "depends": ["xdotool", "libxss1", "xinput", "libappindicator3-1", "libnotify4"],
-      "artifactName": "EmployeeMonitor-${version}.${ext}"
+      "artifactName": "EmployeeMonitor-${version}.${ext}",
+      "maintainer": "Aryav Gupta <aryavgupta2005@gmail.com>"
     }
   },
   "dependencies": {
