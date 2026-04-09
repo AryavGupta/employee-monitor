@@ -278,11 +278,14 @@ app.on('ready', async () => {
       return;
     }
 
-    try {
-      execSync('which xdotool', { stdio: 'ignore' });
-    } catch (e) {
-      dialog.showErrorBox('Missing Dependency',
-        'xdotool is required but not installed.\n\nInstall with:\n  sudo apt install xdotool');
+    // Check required dependencies
+    const missingDeps = [];
+    try { execSync('which xdotool', { stdio: 'ignore' }); } catch (e) { missingDeps.push('xdotool'); }
+    try { execSync('which xinput', { stdio: 'ignore' }); } catch (e) { missingDeps.push('xinput'); }
+
+    if (missingDeps.length > 0) {
+      dialog.showErrorBox('Missing Dependencies',
+        `The following packages are required:\n  ${missingDeps.join(', ')}\n\nInstall with:\n  sudo apt install ${missingDeps.join(' ')}`);
       app.quit();
       return;
     }
@@ -675,17 +678,20 @@ app.on('activate', () => {
 
 // Setup auto-launch on system boot using Electron's native API
 function setupAutoLaunch() {
-  try {
-    app.setLoginItemSettings({
-      openAtLogin: true,
-      name: 'EmployeeMonitor'
-    });
-    console.log('Auto-launch enabled via setLoginItemSettings');
-  } catch (error) {
-    console.log('Error setting auto-launch:', error.message);
+  // setLoginItemSettings only works on Windows/macOS; Linux uses .desktop file
+  if (os.platform() !== 'linux') {
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: true,
+        name: 'EmployeeMonitor'
+      });
+      console.log('Auto-launch enabled via setLoginItemSettings');
+    } catch (error) {
+      console.log('Error setting auto-launch:', error.message);
+    }
   }
 
-  // Linux: ensure .desktop file in autostart as fallback
+  // Linux: create .desktop file in autostart
   if (os.platform() === 'linux') {
     try {
       const autostartDir = path.join(os.homedir(), '.config', 'autostart');
@@ -1036,9 +1042,9 @@ async function getLinuxBrowserUrl(appName) {
       if (err || !wid.trim()) return resolve(null);
       const windowId = wid.trim();
 
-      exec(`xprop -id ${windowId} _NET_WM_NAME`, { timeout: 3000 }, (err2, stdout) => {
+      exec(`xprop -id ${parseInt(windowId)} _NET_WM_NAME`, { timeout: 3000 }, (err2, stdout) => {
         if (err2) return resolve(null);
-        const match = stdout.match(/= "(.*)"$/);
+        const match = stdout.match(/= "(.*)"/);
         if (!match) return resolve(null);
         const fullTitle = match[1];
 

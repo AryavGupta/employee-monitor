@@ -87,7 +87,7 @@
       }
     },
     "deb": {
-      "depends": ["xdotool", "libxss1", "xinput"],
+      "depends": ["xdotool", "libxss1", "xinput", "libappindicator3-1", "libnotify4"],
       "artifactName": "EmployeeMonitor-${version}.${ext}"
     }
   },
