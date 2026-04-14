@@ -40,8 +40,12 @@ function Screenshots({ user, onLogout }) {
     flagged: ''
   });
   const [stats, setStats] = useState(null);
+  const [modalFullUrl, setModalFullUrl] = useState(null);
   const debounceTimer = useRef(null);
   const userDropdownRef = useRef(null);
+  // Cache full-resolution URLs fetched on modal open, keyed by screenshot id.
+  // Arrow-key navigation revisits the cache instead of re-hitting the API.
+  const fullUrlCacheRef = useRef(new Map());
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -54,7 +58,9 @@ function Screenshots({ user, onLogout }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Debounced fetch for filter changes (only when user is selected)
+  // Debounced fetch for filter changes (only when user is selected).
+  // Interval is filtered client-side via useMemo below, so changing it
+  // should NOT trigger a refetch — only the displayed subset changes.
   useEffect(() => {
     if (!filters.userId) return;
 
@@ -70,7 +76,28 @@ function Screenshots({ user, onLogout }) {
         clearTimeout(debounceTimer.current);
       }
     };
-  }, [filters]);
+  }, [filters.userId, filters.startDate, filters.endDate, filters.startTime, filters.endTime, filters.flagged]);
+
+  // Client-side interval filter. Keeps one screenshot per N-minute bucket
+  // (aligned to epoch) so "every 5 min" actually means every 5 min of elapsed
+  // time, not wall-clock :00/:05/:10 boundaries.
+  const displayedScreenshots = useMemo(() => {
+    const intervalMin = parseInt(filters.interval, 10);
+    if (!intervalMin || intervalMin <= 0) return screenshots;
+    const bucketMs = intervalMin * 60 * 1000;
+    const seen = new Set();
+    const kept = [];
+    // screenshots come from the API sorted captured_at DESC; iterate in order
+    // and keep the first (newest) per bucket.
+    for (const s of screenshots) {
+      const bucket = Math.floor(new Date(s.captured_at).getTime() / bucketMs);
+      if (!seen.has(bucket)) {
+        seen.add(bucket);
+        kept.push(s);
+      }
+    }
+    return kept;
+  }, [screenshots, filters.interval]);
 
   // Handle keyboard navigation
   useEffect(() => {
@@ -87,22 +114,59 @@ function Screenshots({ user, onLogout }) {
       if (selectedScreenshot && !enlargedImage) {
         if (e.key === 'ArrowLeft' && currentIndex > 0) {
           navigateScreenshot(-1);
-        } else if (e.key === 'ArrowRight' && currentIndex < screenshots.length - 1) {
+        } else if (e.key === 'ArrowRight' && currentIndex < displayedScreenshots.length - 1) {
           navigateScreenshot(1);
         }
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [enlargedImage, selectedScreenshot, currentIndex, screenshots.length]);
+  }, [enlargedImage, selectedScreenshot, currentIndex, displayedScreenshots.length]);
 
   const navigateScreenshot = (direction) => {
     const newIndex = currentIndex + direction;
-    if (newIndex >= 0 && newIndex < screenshots.length) {
+    if (newIndex >= 0 && newIndex < displayedScreenshots.length) {
       setCurrentIndex(newIndex);
-      setSelectedScreenshot(screenshots[newIndex]);
+      setSelectedScreenshot(displayedScreenshots[newIndex]);
     }
   };
+
+  // Fetch full-resolution URL when the modal opens or navigates to a new
+  // screenshot. The list endpoint no longer returns full_url to save bandwidth;
+  // the full URL lives on GET /api/screenshots/:id. Results are cached by id so
+  // arrow-key nav revisits previously-viewed frames instantly.
+  useEffect(() => {
+    if (!selectedScreenshot) {
+      setModalFullUrl(null);
+      return;
+    }
+    const id = selectedScreenshot.id;
+    const cached = fullUrlCacheRef.current.get(id);
+    if (cached) {
+      setModalFullUrl(cached);
+      return;
+    }
+    // Show the thumbnail immediately as a placeholder while the full loads.
+    setModalFullUrl(null);
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const res = await axios.get(`${API_URL}/api/screenshots/${id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (cancelled) return;
+        if (res.data.success && res.data.data) {
+          const url = res.data.data.screenshot_url;
+          fullUrlCacheRef.current.set(id, url);
+          setModalFullUrl(url);
+        }
+      } catch (err) {
+        console.error('Failed to load full screenshot:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedScreenshot]);
 
   const fetchData = useCallback(async () => {
     if (!filters.userId) return;
@@ -116,7 +180,7 @@ function Screenshots({ user, onLogout }) {
       params.append('startDate', new Date(`${filters.startDate}T${filters.startTime}:00`).toISOString());
       params.append('endDate', new Date(`${filters.endDate}T${filters.endTime}:59`).toISOString());
       if (filters.flagged) params.append('flagged', filters.flagged);
-      if (filters.interval) params.append('interval', filters.interval);
+      // interval is applied client-side via useMemo — do not send to the server
       params.append('limit', '100');
 
       const [screenshotsRes, statsRes] = await Promise.all([
@@ -190,10 +254,17 @@ function Screenshots({ user, onLogout }) {
     return `${API_URL}${url}`;
   };
 
-  // Get full resolution URL for modal view
+  // Get full resolution URL for modal view. Resolution order:
+  //   1) modalFullUrl — the full URL fetched via GET /:id when the modal opened
+  //   2) fullUrlCacheRef — a previously fetched URL for this same screenshot
+  //   3) screenshot.screenshot_url — the thumbnail, used as an instant placeholder
+  //      while (1) is still loading
   const getFullImageUrl = (screenshot) => {
-    // Use full_url if available (returned by API for Storage-based screenshots)
-    const url = screenshot.full_url || screenshot.screenshot_url;
+    if (!screenshot) return '';
+    const cached = fullUrlCacheRef.current.get(screenshot.id);
+    const url = (selectedScreenshot && screenshot.id === selectedScreenshot.id && modalFullUrl)
+      || cached
+      || screenshot.screenshot_url;
     if (!url) return '';
     if (url.startsWith('data:') || url.startsWith('http')) {
       return url;
@@ -360,10 +431,10 @@ function Screenshots({ user, onLogout }) {
               <div className="loading">Loading screenshots...</div>
             ) : (
               <div className="screenshots-grid">
-                {screenshots.length === 0 ? (
+                {displayedScreenshots.length === 0 ? (
                   <div className="no-data">No screenshots found for the selected filters</div>
                 ) : (
-                  screenshots.map((screenshot, index) => (
+                  displayedScreenshots.map((screenshot, index) => (
                     <div key={screenshot.id} className="screenshot-card" onClick={() => viewScreenshot(screenshot, index)}>
                       <div className="screenshot-thumbnail">
                         <img src={getImageUrl(screenshot)} alt="Screenshot" loading="lazy" />
@@ -406,7 +477,7 @@ function Screenshots({ user, onLogout }) {
                   ‹
                 </button>
               )}
-              {currentIndex < screenshots.length - 1 && (
+              {currentIndex < displayedScreenshots.length - 1 && (
                 <button className="nav-arrow nav-next" onClick={(e) => { e.stopPropagation(); navigateScreenshot(1); }}>
                   ›
                 </button>
@@ -418,13 +489,13 @@ function Screenshots({ user, onLogout }) {
                     src={getFullImageUrl(selectedScreenshot)}
                     alt="Screenshot"
                     className="modal-screenshot"
-                    onClick={() => setEnlargedImage(getFullImageUrl(selectedScreenshot))}
+                    onClick={() => setEnlargedImage(true)}
                     title="Click to enlarge"
                   />
                   <div className="modal-footer">
                     <span className="enlarge-hint">Click image to enlarge</span>
                     <span className="nav-hint">Use ← → arrow keys to navigate</span>
-                    <span className="screenshot-counter">{currentIndex + 1} / {screenshots.length}</span>
+                    <span className="screenshot-counter">{currentIndex + 1} / {displayedScreenshots.length}</span>
                   </div>
                 </div>
 
@@ -519,11 +590,12 @@ function Screenshots({ user, onLogout }) {
           </div>
         )}
 
-        {/* Full Screen Image Viewer */}
-        {enlargedImage && (
+        {/* Full Screen Image Viewer — reads URL live via getFullImageUrl so it
+            upgrades from thumbnail → full-resolution as soon as the fetch lands */}
+        {enlargedImage && selectedScreenshot && (
           <div className="lightbox" onClick={() => setEnlargedImage(null)}>
             <button className="lightbox-close" onClick={() => setEnlargedImage(null)}>×</button>
-            <img src={enlargedImage} alt="Full size screenshot" />
+            <img src={getFullImageUrl(selectedScreenshot)} alt="Full size screenshot" />
           </div>
         )}
       </div>

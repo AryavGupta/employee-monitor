@@ -121,16 +121,18 @@ router.post('/upload', authenticateToken, async (req, res) => {
   }
 });
 
-// Get screenshots with filtering (returns thumbnail_url for list view)
+// Get screenshots with filtering. Returns thumbnail URLs only — the full
+// resolution URL is fetched lazily by the modal via GET /:id. Returning
+// both per row duplicated the payload and is wasted bytes since the modal
+// opens on <5% of rows.
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
-    const { userId, startDate, endDate, limit = 50, offset = 0, flagged, interval } = req.query;
+    const { userId, startDate, endDate, limit = 50, offset = 0, flagged } = req.query;
 
     let query = `
       SELECT s.id, s.user_id,
              COALESCE(s.thumbnail_url, s.screenshot_url) as screenshot_url,
-             s.screenshot_url as full_url,
              s.captured_at, s.file_size, s.is_flagged, s.flag_reason,
              u.email, u.full_name, t.name as team_name
       FROM screenshots s
@@ -192,13 +194,12 @@ router.get('/', authenticateToken, async (req, res) => {
       paramCount++;
     }
 
-    // Interval filter: only show screenshots at interval boundaries (e.g., :00, :05, :10 for 5-min interval)
-    if (interval && parseInt(interval) > 0) {
-      const intervalMinutes = parseInt(interval);
-      query += ` AND EXTRACT(MINUTE FROM s.captured_at)::integer % $${paramCount} = 0`;
-      params.push(intervalMinutes);
-      paramCount++;
-    }
+    // Interval filter used to be SQL `EXTRACT(MINUTE FROM captured_at) % N = 0`,
+    // which (a) was semantically wrong — it only matched wall-clock :00/:05/:10
+    // marks, not "every Nth screenshot" — and (b) was non-sargable on the indexed
+    // captured_at column, so the planner couldn't use idx_screenshots_user_captured_at
+    // and fell back to a filter over the full user+date range. Interval thinning
+    // is now applied client-side in Screenshots.js via useMemo over the fetched rows.
 
     query += ` ORDER BY s.captured_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     params.push(parseInt(limit), parseInt(offset));
