@@ -361,6 +361,41 @@ Before finalizing any change, verify:
 
 *No active issues at this time.*
 
+### RESOLVED — April 2026 (Firefox / Unknown Application Detection)
+
+* **Firefox (and potentially any non-ASCII-titled app) showed as "Unknown"** (April 2026): Chrome and Explorer worked; Firefox logged as `applicationName: "Unknown"`. The active-window PowerShell script at `desktop-app/main.js:1349` had three compounding flaws:
+  1. `powershell -File …` ran **without `-NoProfile`**, so any line the user's `$PROFILE` wrote to stdout prepended the JSON and broke `JSON.parse` → silent fallback to `'Unknown'`.
+  2. **No explicit output encoding**. Firefox's default title separator is em dash (`—` U+2014, e.g. `"Page Title — Mozilla Firefox"`). PowerShell 5.1 `ConvertTo-Json` can emit raw non-ASCII bytes; Node's `exec` decodes stdout as UTF-8 by default; non-ASCII bytes become replacement chars or break parsing.
+  3. The JS `catch` at the end of the exec callback returned `'Unknown'` with **no stderr log**, so the real cause was invisible to diagnosis.
+  * **Fix** (`desktop-app/main.js`):
+    - PowerShell script now sets `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` and `$OutputEncoding = ::UTF8`, uses `GetWindowTextW` + `GetWindowTextLengthW` (dynamic buffer, no truncation), and routes all try/catch errors to `[Console]::Error.WriteLine` so stdout only ever carries JSON.
+    - Script now prefers `Process.MainModule.FileVersionInfo.ProductName` ("Mozilla Firefox", "Google Chrome") with graceful fall-back to `ProcessName` when `MainModule` throws Access Denied on sandboxed renderers. Outputs `-Compress` single-line JSON.
+    - Node `exec` call adds `-NoProfile -NonInteractive`, captures stderr separately, logs raw stdout+stderr on JSON parse failure, and pulls the first balanced `{...}` slice before parsing for defensive survival against profile contamination.
+    - `trackActiveApplication()` now returns both `appName` (display, e.g. "Mozilla Firefox") and `processName` (raw, e.g. "firefox"). `extractBrowserUrl(appName, title, hwnd, processName)` matches against both strings so future browsers still route even if the display name is unusual, and passes the raw `processName` to the URL-extraction PowerShell script (which calls `Get-Process -Name`).
+  * **What was NOT a hardcoded app list**: the activity-log `applicationName` code was already generic (just passed through `result.ProcessName`). The `SAFE_BROWSER_PROCESSES` whitelist only guards shell-interpolated args to the URL-extraction script — it never touches activity-log app names. It's kept as-is (security control against command injection).
+  * **Affected files**: `desktop-app/main.js` — `initTrackingScripts()`, `trackActiveApplication()`, `extractBrowserUrl()`, `trackActivity()`, `sendHeartbeat()`
+  * **Prevention**:
+    - When spawning `powershell` from Node, ALWAYS pass `-NoProfile -NonInteractive`. Without `-NoProfile`, stdout is unpredictable.
+    - When piping anything non-ASCII through PowerShell stdout to Node, set `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` at the top of the script. Node's `exec` defaults to UTF-8 decoding.
+    - All PowerShell try/catch blocks should write to `[Console]::Error.WriteLine` (stderr), never to stdout. Reserve stdout for the structured payload.
+    - On silent-fallback paths in Node (`catch (e) { resolve(default) }`), always log the raw stdout/stderr before defaulting. A silent fallback is a debugging dead-end.
+
+### RESOLVED — April 2026 (Stale Session Inflation Across Days)
+
+* **Shift attendance inflated to ~24h when desktop app failed to end a session** (April 2026): A session started 11:41 AM on 13-04 showed Total 23h 46m / Idle 19h on 14-04 morning even though screenshots ended at 5:05 PM on 13-04. Three compounding bugs:
+  1. **Desktop `powerMonitor.on('suspend')`** paused intervals but never called `endWorkSession()`, so the session stayed `is_active=true` when the laptop was closed/slept.
+  2. **`GET /api/sessions/active`** didn't run stale-session cleanup, so the desktop app's resume handler found the zombie session and kept using it. The 11:41 AM start_time persisted into the next calendar day.
+  3. **`/api/reports/shift-attendance`** computed `totalWallClock = now − firstLogin` for any active session with no cap at last evidence-of-life, dumping the ~19h gap into idle (`idle = total − active`).
+  * **Fix**:
+    - `reports.js` `/shift-attendance`: for active sessions, cap wall-clock end at `GREATEST(last_heartbeat, MAX(activity.timestamp), MAX(screenshot.captured_at))` within the shift window (with 90s grace for truly-live users), bounded by `shift_end_utc`. Individual session `duration_seconds` in the list uses the same cap so list matches summary.
+    - `sessions.js` `GET /active`: calls `closeAllStaleSessions(pool)` (5-min heartbeat gate) before the SELECT so zombies get closed before the desktop app can "resume" them. Used `closeAllStaleSessions` not `closeStaleSessionsForUser` because the user-scoped helper has no staleness filter and would kill fresh sessions.
+    - `desktop-app/main.js` `suspend`: awaits `endWorkSession()` with a 3s `Promise.race` timeout after flushing activity. `resume`: unconditionally starts a fresh session (removed `/active` short-circuit) — `/sessions/start` already closes prior actives via `closeStaleSessionsForUser`.
+  * **Affected files**: `admin-dashboard/api/routes/reports.js`, `admin-dashboard/api/routes/sessions.js`, `desktop-app/main.js`
+  * **Prevention**:
+    - Never compute time metrics as `now − start_time` for a long-lived resource without a cap at last evidence-of-life. Sleep, crashes, and lid-close will always break the "session is still live" assumption.
+    - Defense in depth for session lifecycle: desktop-side end on suspend, server-side stale cleanup on every read path that can influence the desktop's decision-making, and read-time capping in any report that displays durations.
+    - `closeStaleSessionsForUser` (sessions.js:7) closes unconditionally — only use it where you're about to create a replacement session (e.g. `/start`). Use `closeAllStaleSessions` for read-time cleanup because it has the 5-min heartbeat gate.
+
 ### RESOLVED — April 2026 (Total Hours)
 
 * **Shift attendance "Total Hours" showed activity-log sum instead of wall-clock time** (April 2026): The `/api/reports/shift-attendance` endpoint computed `total_seconds` as `SUM(duration_seconds)` from `activity_logs` (i.e. `active + idle`). This is much less than wall-clock time since activity logs don't cover every second. Login 12:58 PM → Logout 5:00 PM showed 1h 32m instead of 4h 2m.

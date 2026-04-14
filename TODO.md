@@ -26,7 +26,8 @@
 - [x] Firewall/VPN network support (30s boot delay + captive portal detection) - COMPLETED
 - [x] Working hours enforcement (auto-pause/resume tracking) - COMPLETED
 - [x] Sleep/wake session handling (<5 min resumes, >5 min new session) - COMPLETED
-- [ ] Fix "Unknown" application name in activity logs (PowerShell detection issue)
+- [x] End session on suspend + always-fresh session on resume (fix cross-day inflation) - COMPLETED (Apr 2026)
+- [x] Fix "Unknown" application name in activity logs (PowerShell detection issue) - COMPLETED Apr 2026
 - [ ] Add auto-update functionality
 - [ ] Add system tray tooltip with current status
 - [ ] Package for Mac (DMG) and Linux

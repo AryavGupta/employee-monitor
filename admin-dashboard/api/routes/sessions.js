@@ -223,6 +223,12 @@ router.get('/active', authenticateToken, async (req, res) => {
     const pool = req.app.locals.pool;
     const userId = req.user.userId;
 
+    // Auto-close zombie sessions (heartbeat stale >5 min) before answering.
+    // Prevents the desktop app from "resuming" a session that was left open
+    // across a sleep / lid-close. Uses the global cleanup which already has
+    // the staleness filter, so still-live users are unaffected.
+    try { await closeAllStaleSessions(pool); } catch (e) { /* non-critical */ }
+
     const result = await pool.query(
       'SELECT * FROM sessions WHERE user_id = $1 AND is_active = true ORDER BY start_time DESC LIMIT 1',
       [userId]

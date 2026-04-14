@@ -592,10 +592,55 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
     const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
     const lastLogout = lastSession?.end_time || null;
     const hasActiveSession = sessions.some(s => s.effective_status === 'active' || s.effective_status === 'idle');
+    // "Open" = any session row with no end_time yet. This is wider than hasActiveSession:
+    // a zombie session that slipped past closeAllStaleSessions (heartbeat <5min so the
+    // gate didn't fire, but still not a live user) has end_time IS NULL and must be
+    // capped at evidence-of-life, not left at total=0.
+    const hasOpenSession = sessions.some(s => !s.end_time);
 
-    // Total hours = wall-clock time from first login to last logout (or now if active)
+    // For open sessions we must NOT use `now - firstLogin`, because the desktop app may
+    // have failed to send an end (lid close, crash, sleep without shutdown). Cap the
+    // wall-clock end at the last evidence-of-life within the shift window:
+    // GREATEST(last_heartbeat, MAX(activity_logs.timestamp), MAX(screenshots.captured_at)).
+    // Then bound by shift_end_utc so an active session never bleeds past midnight.
+    let effectiveEndTs = null;
+    if (firstLogin) {
+      if (hasOpenSession) {
+        const evidenceResult = await pool.query(
+          `SELECT GREATEST(
+             (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
+             (SELECT MAX(timestamp) FROM activity_logs
+                WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3),
+             (SELECT MAX(captured_at) FROM screenshots
+                WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3)
+           ) as evidence_end`,
+          [targetUserId, shift_start_utc, shift_end_utc]
+        );
+        const evidence = evidenceResult.rows[0]?.evidence_end;
+        const now = new Date();
+        const shiftEnd = new Date(shift_end_utc);
+        const first = new Date(firstLogin);
+        // 90s grace so a currently-live user still reads as "now".
+        const LIVE_GRACE_MS = 90 * 1000;
+        let candidate;
+        if (evidence && (now - new Date(evidence)) <= LIVE_GRACE_MS) {
+          candidate = now;
+        } else if (evidence) {
+          candidate = new Date(evidence);
+        } else {
+          candidate = first;
+        }
+        if (candidate > shiftEnd) candidate = shiftEnd;
+        if (candidate > now) candidate = now;
+        if (candidate < first) candidate = first;
+        effectiveEndTs = candidate;
+      } else {
+        effectiveEndTs = new Date(lastLogout || firstLogin);
+      }
+    }
+
     const totalWallClock = firstLogin
-      ? Math.floor(((hasActiveSession ? new Date() : new Date(lastLogout || firstLogin)) - new Date(firstLogin)) / 1000)
+      ? Math.max(Math.floor((effectiveEndTs - new Date(firstLogin)) / 1000), 0)
       : 0;
 
     res.json({
@@ -612,18 +657,23 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
           is_night_shift: isNightShift,
           label: shiftLabel
         },
-        sessions: sessions.map(s => ({
+        sessions: sessions.map(s => {
+          // For open sessions, cap displayed duration at effectiveEndTs (last evidence-of-life)
+          // so the session list is consistent with the summary totals.
+          const durSecs = s.end_time
+            ? (parseInt(s.duration_seconds) || Math.floor((new Date(s.end_time) - new Date(s.start_time)) / 1000))
+            : Math.max(Math.floor(((effectiveEndTs || new Date()) - new Date(s.start_time)) / 1000), 0);
+          return {
           id: s.id,
           start_time: s.start_time,
           end_time: s.end_time,
-          duration_seconds: s.end_time
-            ? (parseInt(s.duration_seconds) || Math.floor((new Date(s.end_time) - new Date(s.start_time)) / 1000))
-            : Math.floor((Date.now() - new Date(s.start_time).getTime()) / 1000),
+          duration_seconds: durSecs,
           active_seconds: parseInt(s.active_seconds) || 0,
           idle_seconds: parseInt(s.idle_seconds) || 0,
           effective_status: s.effective_status,
           presence_idle_seconds: parseInt(s.presence_idle_seconds) || 0
-        })),
+          };
+        }),
         summary: {
           first_login: firstLogin,
           last_logout: lastLogout,

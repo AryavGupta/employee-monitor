@@ -427,7 +427,7 @@ async function checkStoredCredentials() {
 
 function setupPowerMonitorHandlers() {
   // System is about to sleep/suspend
-  powerMonitor.on('suspend', () => {
+  powerMonitor.on('suspend', async () => {
     console.log('System suspending - pausing tracking');
     isSuspended = true;
     suspendTime = Date.now();
@@ -446,10 +446,28 @@ function setupPowerMonitorHandlers() {
       heartbeatInterval = null;
     }
 
-    // Flush any pending activity logs before sleep
-    sendActivityBatch().catch(err => {
+    // Flush pending activity and explicitly end the session. Best-effort: the OS
+    // may cut us off mid-request. Without this, the server has no way to know
+    // the session is over until the 5-min heartbeat staleness gate trips.
+    try {
+      await Promise.race([
+        sendActivityBatch(),
+        new Promise(resolve => setTimeout(resolve, 2000))
+      ]);
+    } catch (err) {
       console.log('Could not flush activity before sleep:', err.message);
-    });
+    }
+
+    if (CONFIG.USER_TOKEN && currentSessionId) {
+      try {
+        await Promise.race([
+          endWorkSession(),
+          new Promise(resolve => setTimeout(resolve, 3000))
+        ]);
+      } catch (err) {
+        console.log('Could not end session on suspend:', err.message);
+      }
+    }
 
     // Notify server that user is going offline due to sleep
     if (CONFIG.USER_TOKEN) {
@@ -479,33 +497,19 @@ function setupPowerMonitorHandlers() {
     if (isTracking && CONFIG.USER_TOKEN) {
       console.log('Resuming tracking after wake...');
 
-      // If sleep was long (>5 min), the server may have auto-closed the session.
-      // Check and start a new session if needed.
-      // Wrapped in try/catch so interval restart ALWAYS happens below.
-      if (sleepDuration > 300) {
-        console.log('Long sleep detected, checking if session is still active...');
-        try {
-          const checkRes = await axios.get(
-            `${CONFIG.API_URL}/api/sessions/active`,
-            { headers: { Authorization: `Bearer ${CONFIG.USER_TOKEN}` }, timeout: 5000 }
-          );
-          if (!checkRes.data.data) {
-            console.log('Session was closed during sleep, starting new session...');
-            totalActiveSeconds = 0;
-            totalIdleSeconds = 0;
-            await startWorkSession();
-          }
-        } catch (e) {
-          console.log('Could not check/start session after wake:', e.message);
-          try {
-            totalActiveSeconds = 0;
-            totalIdleSeconds = 0;
-            await startWorkSession();
-          } catch (e2) {
-            console.error('Failed to start new session after wake:', e2.message);
-            // Continue anyway — intervals must restart even without a session
-          }
-        }
+      // Always start a fresh session on wake. The suspend handler attempted to
+      // end the previous one, and /sessions/start closes any leftover active
+      // row for this user before creating the new one (closeStaleSessionsForUser).
+      // This guarantees the 11:41-AM-yesterday-to-now-morning inflation can't
+      // happen even if suspend/end failed to reach the server.
+      try {
+        currentSessionId = null;
+        totalActiveSeconds = 0;
+        totalIdleSeconds = 0;
+        await startWorkSession();
+      } catch (e) {
+        console.error('Failed to start new session after wake:', e.message);
+        // Continue anyway — intervals must restart even without a session
       }
 
       // Restart intervals — MUST always run regardless of session check above
@@ -1058,22 +1062,25 @@ async function getLinuxBrowserUrl(appName) {
   });
 }
 
-async function extractBrowserUrl(appName, windowTitle, hwnd) {
+async function extractBrowserUrl(appName, windowTitle, hwnd, processName = null) {
+  // Match against BOTH the friendly display name ("Mozilla Firefox") and the
+  // raw process name ("firefox"). This way a future browser with a weird display
+  // name but a known exe still routes to URL extraction.
   const browserPatterns = ['chrome', 'firefox', 'edge', 'msedge', 'brave', 'opera', 'safari', 'vivaldi'];
-  const appNameLower = appName.toLowerCase();
+  const haystack = `${appName || ''} ${processName || ''}`.toLowerCase();
 
-  const isBrowser = browserPatterns.some(b => appNameLower.includes(b));
+  const isBrowser = browserPatterns.some(b => haystack.includes(b));
   if (!isBrowser) return null;
 
-  // Try to extract URL from window title
-  // Many browsers show "Page Title - Browser Name" or "Page Title - URL - Browser"
   let url = null;
 
-  // Platform-specific URL extraction
+  // Platform-specific URL extraction.
+  // Pass the raw process name when available because the downstream PowerShell
+  // script takes -ProcessName and queries Get-Process -Name on it.
   if (os.platform() === 'win32') {
-    url = await getWindowsEdgeChromeUrl(appName, hwnd);
+    url = await getWindowsEdgeChromeUrl(processName || appName, hwnd);
   } else if (os.platform() === 'linux') {
-    url = await getLinuxBrowserUrl(appName);
+    url = await getLinuxBrowserUrl(processName || appName);
   }
 
   // Fallback: try to parse URL from window title if it contains one
@@ -1340,25 +1347,75 @@ function initTrackingScripts() {
 
   const tempDir = os.tmpdir();
 
-  // Active window detection script
+  // Active window detection script.
+  // Design goals:
+  //   - Universal: works for any app by reading the OS process table, no hardcoded app list.
+  //   - Robust: UTF-8 stdout so non-ASCII window titles (Firefox em dash, CJK, emoji) survive
+  //             Node's default utf8 decoding.
+  //   - Silent side-channel: Add-Type / Get-Process errors route to stderr, never to stdout,
+  //             so JSON.parse on the Node side sees only the JSON payload.
+  //   - Friendly name: prefers FileVersionInfo.ProductName ("Mozilla Firefox", "Google Chrome")
+  //             and falls back to ProcessName when the main module is sandbox-restricted.
   activeWindowScriptPath = path.join(tempDir, `em-activewin-${process.pid}.ps1`);
   fs.writeFileSync(activeWindowScriptPath, `
-Add-Type -MemberDefinition '
-    [DllImport("user32.dll")]
-    public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")]
-    public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
-    [DllImport("user32.dll")]
-    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-' -Name 'WinAPI' -Namespace 'User32' -ErrorAction SilentlyContinue
+# Force UTF-8 so non-ASCII titles survive the stdout pipe into Node.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+$ErrorActionPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
+
+# Load user32 bindings. Pipe to Out-Null so any "type already exists" warnings
+# (shouldn't happen with a fresh process, but defensive) never touch stdout.
+$null = Add-Type -MemberDefinition @'
+[DllImport("user32.dll")]
+public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+public static extern int GetWindowTextW(IntPtr hWnd, System.Text.StringBuilder text, int count);
+[DllImport("user32.dll")]
+public static extern int GetWindowTextLengthW(IntPtr hWnd);
+[DllImport("user32.dll")]
+public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+'@ -Name 'WinAPI' -Namespace 'User32' -PassThru 2>&1
 
 $hwnd = [User32.WinAPI]::GetForegroundWindow()
-$title = New-Object System.Text.StringBuilder 256
-[User32.WinAPI]::GetWindowText($hwnd, $title, 256) | Out-Null
+
+# Fetch the exact title length instead of a fixed buffer so long Firefox/Chrome
+# tab titles aren't truncated.
+$titleLen = [User32.WinAPI]::GetWindowTextLengthW($hwnd)
+if ($titleLen -lt 0) { $titleLen = 0 }
+$title = New-Object System.Text.StringBuilder ($titleLen + 1)
+if ($titleLen -gt 0) {
+    [User32.WinAPI]::GetWindowTextW($hwnd, $title, $titleLen + 1) | Out-Null
+}
+
 $processId = [uint32]0
 [User32.WinAPI]::GetWindowThreadProcessId($hwnd, [ref]$processId) | Out-Null
-$process = Get-Process -Id $processId -ErrorAction SilentlyContinue
-$pName = if ($process) { $process.ProcessName } else { "Unknown" }
+
+$pName = 'Unknown'
+$displayName = $null
+try {
+    # GetProcessById is lighter than Get-Process and doesn't depend on provider modules.
+    $proc = [System.Diagnostics.Process]::GetProcessById([int]$processId)
+    if ($proc) {
+        $pName = $proc.ProcessName
+        # Prefer the friendly product name from the binary metadata. Wrapped in a
+        # separate try because MainModule throws Access Denied on sandboxed children
+        # (some Chrome/Firefox renderer processes) even when ProcessName is readable.
+        try {
+            $fvi = $proc.MainModule.FileVersionInfo
+            if ($fvi) {
+                if ($fvi.ProductName -and $fvi.ProductName.Trim()) { $displayName = $fvi.ProductName.Trim() }
+                elseif ($fvi.FileDescription -and $fvi.FileDescription.Trim()) { $displayName = $fvi.FileDescription.Trim() }
+            }
+        } catch {
+            [Console]::Error.WriteLine("MainModule access denied for pid $processId ($pName): $_")
+        }
+    }
+} catch {
+    [Console]::Error.WriteLine("GetProcessById failed for pid $processId : $_")
+}
+if (-not $displayName) { $displayName = $pName }
 
 $filePath = ""
 if ($pName -eq "explorer" -and $hwnd -ne [IntPtr]::Zero) {
@@ -1406,12 +1463,13 @@ if ($pName -eq "explorer" -and $hwnd -ne [IntPtr]::Zero) {
     }
 }
 
-@{
+[PSCustomObject]@{
     Title = $title.ToString()
     ProcessName = $pName
+    DisplayName = $displayName
     FilePath = $filePath
     HWND = $hwnd.ToInt64()
-} | ConvertTo-Json
+} | ConvertTo-Json -Compress
 `);
 
   // Browser URL extraction script
@@ -1487,27 +1545,53 @@ async function trackActiveApplication() {
 
     if (platform === 'win32') {
       if (!activeWindowScriptPath) {
-        resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
+        resolve({ appName: 'Unknown', processName: 'unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
         return;
       }
 
-      exec(`powershell -ExecutionPolicy Bypass -File "${activeWindowScriptPath}"`, { timeout: 5000 }, (error, stdout) => {
-        if (error) {
-          resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
-          return;
+      // -NoProfile: skip the user's $PROFILE so banners / module-load output never
+      //             contaminate stdout (the original Firefox=Unknown root cause).
+      // -NonInteractive: never prompt.
+      // windowsHide: no flashing console window each invocation.
+      exec(
+        `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${activeWindowScriptPath}"`,
+        { timeout: 5000, windowsHide: true, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+        (error, stdout, stderr) => {
+          if (error) {
+            console.warn('[activeWin] PowerShell exec error:', error.message);
+            if (stderr && stderr.trim()) console.warn('[activeWin] stderr:', stderr.trim().slice(0, 500));
+            resolve({ appName: 'Unknown', processName: 'unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
+            return;
+          }
+          try {
+            // ConvertTo-Json -Compress emits a single JSON line. If the user's
+            // environment still contaminates stdout somehow, pull out the first
+            // balanced {...} so one bad line from a module load doesn't break us.
+            const raw = (stdout || '').trim();
+            const firstBrace = raw.indexOf('{');
+            const lastBrace = raw.lastIndexOf('}');
+            const jsonSlice = firstBrace >= 0 && lastBrace > firstBrace
+              ? raw.slice(firstBrace, lastBrace + 1)
+              : raw;
+            const result = JSON.parse(jsonSlice);
+            if (stderr && stderr.trim()) {
+              console.warn('[activeWin] stderr (non-fatal):', stderr.trim().slice(0, 500));
+            }
+            resolve({
+              appName: result.DisplayName || result.ProcessName || 'Unknown',
+              processName: (result.ProcessName || 'unknown').toString().toLowerCase(),
+              windowTitle: result.Title || '',
+              filePath: result.FilePath || null,
+              hwnd: typeof result.HWND === 'number' ? result.HWND : null
+            });
+          } catch (e) {
+            console.warn('[activeWin] JSON parse failed:', e.message);
+            if (stdout) console.warn('[activeWin] raw stdout:', stdout.slice(0, 500));
+            if (stderr) console.warn('[activeWin] stderr:', stderr.slice(0, 500));
+            resolve({ appName: 'Unknown', processName: 'unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
+          }
         }
-        try {
-          const result = JSON.parse(stdout);
-          resolve({
-            appName: result.ProcessName || 'Unknown',
-            windowTitle: result.Title || 'Unknown',
-            filePath: result.FilePath || null,
-            hwnd: typeof result.HWND === 'number' ? result.HWND : null
-          });
-        } catch (e) {
-          resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
-        }
-      });
+      );
     } else if (platform === 'darwin') {
       // macOS: Use AppleScript
       const script = `
@@ -1525,20 +1609,24 @@ async function trackActiveApplication() {
 
       exec(`osascript -e '${script}'`, (error, stdout) => {
         if (error) {
-          resolve({ appName: 'Unknown', windowTitle: 'Unknown' });
+          resolve({ appName: 'Unknown', processName: 'unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
           return;
         }
         const parts = stdout.trim().split('|');
+        const appName = parts[0] || 'Unknown';
         resolve({
-          appName: parts[0] || 'Unknown',
-          windowTitle: parts[1] || 'Unknown'
+          appName,
+          processName: appName.toLowerCase(),
+          windowTitle: parts[1] || 'Unknown',
+          filePath: null,
+          hwnd: null
         });
       });
     } else {
       // Linux: Use xdotool + detect file manager paths
       exec('xdotool getactivewindow getwindowname && xdotool getactivewindow getwindowpid | xargs -I {} ps -p {} -o comm=', (error, stdout) => {
         if (error) {
-          resolve({ appName: 'Unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
+          resolve({ appName: 'Unknown', processName: 'unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
           return;
         }
         const lines = stdout.trim().split('\n');
@@ -1554,7 +1642,7 @@ async function trackActiveApplication() {
           }
         }
 
-        resolve({ appName, windowTitle, filePath, hwnd: null });
+        resolve({ appName, processName: appName.toLowerCase(), windowTitle, filePath, hwnd: null });
       });
     }
   });
@@ -1865,7 +1953,7 @@ async function trackActivity() {
   }
 
   // Get app info, keyboard, mouse, URL — all optional, failures don't lose the log
-  let appInfo = { appName: 'Unknown', windowTitle: 'Unknown', filePath: null, hwnd: null };
+  let appInfo = { appName: 'Unknown', processName: 'unknown', windowTitle: 'Unknown', filePath: null, hwnd: null };
   let kbData = null;
   let mouseDistance = 0;
   let currentUrl = null;
@@ -1895,7 +1983,7 @@ async function trackActivity() {
       currentUrl = 'file:///' + appInfo.filePath.replace(/\\/g, '/');
       currentDomain = 'local';
     } else if (teamSettings?.track_urls !== false) {
-      currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle, appInfo.hwnd);
+      currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle, appInfo.hwnd, appInfo.processName);
       if (currentUrl) {
         currentDomain = extractDomain(currentUrl);
       }
@@ -2027,7 +2115,7 @@ async function sendHeartbeat() {
     let currentUrl = null;
 
     if (teamSettings?.track_urls !== false) {
-      currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle, appInfo.hwnd);
+      currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle, appInfo.hwnd, appInfo.processName);
     }
 
     const idleSeconds = getSystemIdleTime();
