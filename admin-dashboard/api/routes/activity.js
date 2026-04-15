@@ -23,7 +23,7 @@ router.post('/log', authenticateToken, async (req, res) => {
     const result = await pool.query(
       `INSERT INTO activity_logs (user_id, activity_type, application_name, window_title, is_idle, duration_seconds, metadata, is_overtime, shift_date)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, timestamp`,
-      [userId, activityType, truncate(applicationName, 255), windowTitle || null, isIdle ?? false, durationSeconds ?? null, metadata ? JSON.stringify(metadata) : null, isOvertime ?? false, shiftDate || null]
+      [userId, activityType, truncate(applicationName, 255), truncate(windowTitle, 500), isIdle ?? false, durationSeconds ?? null, metadata ? JSON.stringify(metadata) : null, isOvertime ?? false, shiftDate || null]
     );
 
     res.json({ success: true, message: 'Activity logged', data: result.rows[0] });
@@ -60,7 +60,7 @@ router.post('/log/batch', authenticateToken, async (req, res) => {
           userId,
           activity.activityType,
           truncate(activity.applicationName, 255),
-          activity.windowTitle || null,
+          truncate(activity.windowTitle, 500),
           activity.isIdle ?? false,
           activity.durationSeconds ?? null,
           activity.keyboardEvents ?? 0,
@@ -104,7 +104,7 @@ router.post('/log/batch', authenticateToken, async (req, res) => {
           userId,
           activity.activityType,
           truncate(activity.applicationName, 255),
-          activity.windowTitle || null,
+          truncate(activity.windowTitle, 500),
           activity.isIdle ?? false,
           activity.durationSeconds ?? null,
           activity.metadata ? JSON.stringify(activity.metadata) : null
