@@ -2,6 +2,13 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken, getManagedUserIds } = require('./auth');
 
+// Truncate string to max length (varchar column safety). Returns null for empty/nullish.
+const truncate = (v, max) => {
+  if (v == null) return null;
+  const s = String(v);
+  return s.length > max ? s.slice(0, max) : s;
+};
+
 // Log activity
 router.post('/log', authenticateToken, async (req, res) => {
   try {
@@ -16,7 +23,7 @@ router.post('/log', authenticateToken, async (req, res) => {
     const result = await pool.query(
       `INSERT INTO activity_logs (user_id, activity_type, application_name, window_title, is_idle, duration_seconds, metadata, is_overtime, shift_date)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, timestamp`,
-      [userId, activityType, applicationName || null, windowTitle || null, isIdle ?? false, durationSeconds ?? null, metadata ? JSON.stringify(metadata) : null, isOvertime ?? false, shiftDate || null]
+      [userId, activityType, truncate(applicationName, 255), windowTitle || null, isIdle ?? false, durationSeconds ?? null, metadata ? JSON.stringify(metadata) : null, isOvertime ?? false, shiftDate || null]
     );
 
     res.json({ success: true, message: 'Activity logged', data: result.rows[0] });
@@ -52,15 +59,15 @@ router.post('/log/batch', authenticateToken, async (req, res) => {
         values.push(
           userId,
           activity.activityType,
-          activity.applicationName || null,
+          truncate(activity.applicationName, 255),
           activity.windowTitle || null,
           activity.isIdle ?? false,
           activity.durationSeconds ?? null,
           activity.keyboardEvents ?? 0,
           activity.mouseEvents ?? 0,
           activity.mouseDistance ?? 0,
-          activity.url || null,
-          activity.domain || null,
+          truncate(activity.url, 500),
+          truncate(activity.domain, 255),
           activity.isOvertime ?? false,
           activity.shiftDate || null,
           activity.metadata ? JSON.stringify(activity.metadata) : null
@@ -96,7 +103,7 @@ router.post('/log/batch', authenticateToken, async (req, res) => {
         values.push(
           userId,
           activity.activityType,
-          activity.applicationName || null,
+          truncate(activity.applicationName, 255),
           activity.windowTitle || null,
           activity.isIdle ?? false,
           activity.durationSeconds ?? null,

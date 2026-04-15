@@ -55,6 +55,15 @@
 
 ### Recently Fixed (April 2026)
 - [x] Shift attendance CSV export: Total/Active/Idle/Working hours mismatched due to mixing wall-clock and activity-log data sources. Fixed by deriving all metrics from `activity_logs`.
+- [x] `POST /api/activity/log/batch` 500 flood (Postgres 22001, value too long): desktop app sent `url`/`application_name`/`domain` values exceeding varchar limits → entire batch rejected → client retried the same poisoned batch in a loop. Fixed by server-side truncation before insert (`activity.js`).
+
+### Pending Follow-up
+- [ ] Reconcile deployed `activity_logs` schema with `supabase-schema.sql`: error logs reported both `varchar(500)` and `varchar(1000)` overflows, but repo schema has `url VARCHAR(1000)` and `domain VARCHAR(255)`. Run on prod and migrate any mismatched column to `TEXT`:
+  ```sql
+  SELECT column_name, character_maximum_length
+  FROM information_schema.columns
+  WHERE table_name='activity_logs' AND data_type='character varying';
+  ```
 
 ---
 

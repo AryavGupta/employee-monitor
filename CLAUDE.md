@@ -121,6 +121,7 @@ One-liners. Check before proposing changes — don't repeat.
 - **Sleep/wake handlers required** (`powerMonitor` suspend/resume/lock/unlock). Pause intervals on sleep, reset `lastActivityTime` on wake.
 - **Activity batch uploads** need same config as screenshot upload: 30s timeout, `maxContentLength: Infinity`, validate `response.data.success`, only re-queue on 5xx/network (not 400).
 - **Batch INSERT must handle missing columns** (42703) — fall back to core columns if enhanced columns don't exist.
+- **Length-guard varchar inserts at the boundary.** Desktop app sends unbounded `url`/`application_name`/`window_title`/`domain` — long URLs (query strings, tokens, SPA routes) easily exceed varchar limits, causing Postgres 22001 and rejecting the entire batch. Truncate in `activity.js` before insert; one oversized row should never poison the batch.
 - **`app.quit()` + tray:** set `isQuitting` flag so close handler skips `preventDefault()`; explicitly destroy tray.
 - **Close protection:** redirect to hide whenever `tray` exists, never gate on `isTracking` (startup race).
 
