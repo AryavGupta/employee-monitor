@@ -331,6 +331,63 @@ router.post('/logout', authenticateToken, async (req, res) => {
   }
 });
 
+// Token refresh — issue a new token using a still-valid (or recently-expired) token
+// Desktop app calls this proactively before expiry and reactively on 401
+router.post('/refresh', async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'Token required' });
+    }
+
+    // Accept tokens that expired within the last 7 days (grace period for desktop apps)
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        // Allow recently-expired tokens — decode without verification to get claims
+        decoded = jwt.decode(token);
+        if (!decoded || !decoded.exp) {
+          return res.status(401).json({ success: false, message: 'Invalid token' });
+        }
+        const expiredAgo = Math.floor(Date.now() / 1000) - decoded.exp;
+        if (expiredAgo > 7 * 24 * 3600) {
+          return res.status(401).json({ success: false, message: 'Token expired too long ago, please login again' });
+        }
+      } else {
+        return res.status(401).json({ success: false, message: 'Invalid token' });
+      }
+    }
+
+    // Verify user still exists and is active
+    const pool = req.app.locals.pool;
+    const userQuery = await pool.query(
+      'SELECT id, email, role, is_active FROM users WHERE id = $1',
+      [decoded.userId]
+    );
+
+    if (userQuery.rows.length === 0 || !userQuery.rows[0].is_active) {
+      return res.status(401).json({ success: false, message: 'User not found or deactivated' });
+    }
+
+    const user = userQuery.rows[0];
+    const newToken = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+
+    console.log(`Token refreshed for user ${user.id} (${user.email})`);
+    res.json({ success: true, token: newToken });
+  } catch (error) {
+    console.error('Token refresh error:', error);
+    res.status(500).json({ success: false, message: 'Token refresh failed' });
+  }
+});
+
 // Get profile
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
@@ -362,7 +419,14 @@ function authenticateToken(req, res, next) {
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
-      return res.status(403).json({ success: false, message: 'Invalid or expired token' });
+      // 401 = token expired/invalid (client should re-authenticate)
+      // 403 is reserved for valid token but insufficient permissions
+      const isExpired = err.name === 'TokenExpiredError';
+      console.warn(`Token rejected: ${err.name} ${isExpired ? '(expired)' : '(invalid)'}`, {
+        path: req.path,
+        ip: req.ip || req.headers['x-forwarded-for']
+      });
+      return res.status(401).json({ success: false, message: 'Invalid or expired token', expired: isExpired });
     }
     req.user = user;
     next();

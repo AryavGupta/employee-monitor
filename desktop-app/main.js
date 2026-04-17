@@ -22,7 +22,9 @@ const store = new Store({
       properties: {
         token: { type: 'string' },
         userId: { type: 'string' },
-        userData: { type: 'object' }
+        userData: { type: 'object' },
+        email: { type: 'string' },
+        password: { type: 'string' }
       }
     }
   }
@@ -48,18 +50,166 @@ const CONFIG = {
   WORKING_HOURS_END: null
 };
 
+// Token refresh state
+let isRefreshingToken = false;
+let refreshTokenPromise = null;
+let consecutiveAuthFailures = 0;
+let tokenRefreshTimer = null;
+
+// Refresh the auth token — tries /refresh endpoint first, then re-login with stored credentials
+async function refreshToken() {
+  // Prevent concurrent refresh attempts
+  if (isRefreshingToken) return refreshTokenPromise;
+  isRefreshingToken = true;
+
+  refreshTokenPromise = (async () => {
+    try {
+      // Attempt 1: Use /refresh endpoint with current token
+      if (CONFIG.USER_TOKEN) {
+        try {
+          const response = await axios.post(
+            `${CONFIG.API_URL}/api/auth/refresh`,
+            {},
+            {
+              headers: { 'Authorization': `Bearer ${CONFIG.USER_TOKEN}` },
+              timeout: 10000
+            }
+          );
+          if (response.data.success && response.data.token) {
+            CONFIG.USER_TOKEN = response.data.token;
+            const creds = store.get('credentials');
+            if (creds) {
+              creds.token = response.data.token;
+              store.set('credentials', creds);
+            }
+            consecutiveAuthFailures = 0;
+            scheduleTokenRefresh(response.data.token);
+            console.log('Token refreshed successfully via /refresh endpoint');
+            return true;
+          }
+        } catch (refreshErr) {
+          console.log(`Token refresh endpoint failed: ${refreshErr.response?.status || refreshErr.message}`);
+        }
+      }
+
+      // Attempt 2: Re-login with stored email/password
+      const creds = store.get('credentials');
+      if (creds?.email && creds?.password) {
+        try {
+          const response = await axios.post(
+            `${CONFIG.API_URL}/api/auth/login`,
+            { email: creds.email, password: creds.password },
+            { timeout: 10000 }
+          );
+          if (response.data.success && response.data.token) {
+            CONFIG.USER_TOKEN = response.data.token;
+            CONFIG.USER_ID = response.data.userId;
+            CONFIG.USER_DATA = response.data.user;
+            store.set('credentials', {
+              ...creds,
+              token: response.data.token,
+              userId: response.data.userId,
+              userData: response.data.user
+            });
+            consecutiveAuthFailures = 0;
+            scheduleTokenRefresh(response.data.token);
+            console.log('Token refreshed successfully via re-login');
+            return true;
+          }
+        } catch (loginErr) {
+          console.error(`Re-login failed: ${loginErr.response?.status || loginErr.message}`);
+        }
+      }
+
+      console.error('All token refresh attempts failed');
+      return false;
+    } finally {
+      isRefreshingToken = false;
+      refreshTokenPromise = null;
+    }
+  })();
+
+  return refreshTokenPromise;
+}
+
+// Schedule proactive token refresh 5 minutes before expiry
+function scheduleTokenRefresh(token) {
+  if (tokenRefreshTimer) clearTimeout(tokenRefreshTimer);
+  try {
+    // Decode JWT payload (base64) to read exp claim
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    if (payload.exp) {
+      const msUntilExpiry = (payload.exp * 1000) - Date.now();
+      const refreshIn = msUntilExpiry - (5 * 60 * 1000); // 5 minutes before expiry
+      if (refreshIn > 0) {
+        tokenRefreshTimer = setTimeout(async () => {
+          console.log('Proactive token refresh triggered (5 min before expiry)');
+          await refreshToken();
+        }, refreshIn);
+        console.log(`Token refresh scheduled in ${Math.round(refreshIn / 60000)} minutes`);
+      } else {
+        // Token expires in less than 5 minutes — refresh now
+        refreshToken();
+      }
+    }
+  } catch (e) {
+    console.warn('Could not schedule token refresh:', e.message);
+  }
+}
+
+// Handle auth failure during tracking — trigger re-auth, pause if exhausted
+async function handleTrackingAuthFailure(context) {
+  consecutiveAuthFailures++;
+  console.warn(`Auth failure #${consecutiveAuthFailures} on ${context}`);
+
+  if (consecutiveAuthFailures >= 3) {
+    console.error('Too many consecutive auth failures — pausing tracking, showing login');
+    consecutiveAuthFailures = 0;
+    store.delete('credentials');
+    if (isTracking) {
+      stopScreenshotCapture();
+      stopActivityTracking();
+      stopHeartbeat();
+      isTracking = false;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      showWindowWithPage(path.join(__dirname, 'login.html'));
+    }
+    return false;
+  }
+
+  const refreshed = await refreshToken();
+  if (refreshed) {
+    console.log(`Re-auth succeeded after ${context} failure, resuming`);
+    return true; // caller should retry
+  }
+  return false;
+}
+
 // Retry wrapper for API calls with exponential backoff
 async function apiCallWithRetry(apiCall, maxRetries = CONFIG.MAX_RETRIES) {
   let lastError;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await apiCall();
+      const result = await apiCall();
+      consecutiveAuthFailures = 0; // Reset on any successful call
+      return result;
     } catch (error) {
       lastError = error;
 
-      // Don't retry on auth errors (401, 403) or client errors (400)
       const status = error.response?.status;
+
+      // On 401 (expired token): try to refresh and retry once
+      if (status === 401 && attempt === 1) {
+        const refreshed = await refreshToken();
+        if (refreshed) {
+          console.log('Token refreshed after 401, retrying API call');
+          continue; // Retry with new token
+        }
+      }
+
+      // Don't retry on auth errors (401, 403) or client errors (400)
       if (status === 400 || status === 401 || status === 403) {
         throw error;
       }
@@ -380,6 +530,9 @@ async function checkStoredCredentials() {
         CONFIG.USER_ID = credentials.userId;
         CONFIG.USER_DATA = credentials.userData;
 
+        // Schedule proactive token refresh
+        scheduleTokenRefresh(credentials.token);
+
         await fetchTeamSettings();
         startScreenshotCapture();
 
@@ -396,9 +549,28 @@ async function checkStoredCredentials() {
     } catch (error) {
       const status = error.response?.status;
 
-      if (status === 401 || status === 403) {
-        // Token genuinely invalid/expired — clear and show login
-        console.log(`Token rejected with ${status}, clearing credentials`);
+      if (status === 401) {
+        // Token expired — try to refresh before giving up
+        console.log('Token expired on startup, attempting refresh...');
+        const refreshed = await refreshToken();
+        if (refreshed) {
+          console.log('Token refreshed on startup, auto-logging in...');
+          scheduleTokenRefresh(CONFIG.USER_TOKEN);
+          await fetchTeamSettings();
+          startScreenshotCapture();
+          mainWindow.loadFile(path.join(__dirname, 'tracking.html'));
+          return;
+        }
+        // Refresh failed — clear and show login
+        console.log('Token refresh failed on startup, showing login');
+        store.delete('credentials');
+        showWindowWithPage(path.join(__dirname, 'login.html'));
+        return;
+      }
+
+      if (status === 403) {
+        // True authorization failure — clear and show login
+        console.log('Token rejected with 403, clearing credentials');
         store.delete('credentials');
         showWindowWithPage(path.join(__dirname, 'login.html'));
         return;
@@ -415,6 +587,9 @@ async function checkStoredCredentials() {
   CONFIG.USER_TOKEN = credentials.token;
   CONFIG.USER_ID = credentials.userId;
   CONFIG.USER_DATA = credentials.userData;
+
+  // Schedule token refresh — will fire when network comes back within expiry window
+  scheduleTokenRefresh(credentials.token);
 
   startScreenshotCapture();
   mainWindow.loadFile(path.join(__dirname, 'tracking.html'));
@@ -723,12 +898,17 @@ ipcMain.on('login', async (event, credentials) => {
       CONFIG.USER_ID = response.data.userId;
       CONFIG.USER_DATA = response.data.user;
 
-      // Store credentials for persistent login
+      // Store credentials for persistent login (include email/password for silent re-auth)
       store.set('credentials', {
         token: response.data.token,
         userId: response.data.userId,
-        userData: response.data.user
+        userData: response.data.user,
+        email: credentials.email,
+        password: credentials.password
       });
+
+      // Schedule proactive token refresh before expiry
+      scheduleTokenRefresh(response.data.token);
 
       event.reply('login-response', { success: true, user: response.data.user });
 
@@ -1224,7 +1404,12 @@ async function uploadScreenshot(screenshotDataUrl) {
 
     return response.data;
   } catch (error) {
-    console.error('Error uploading screenshot after retries:', error.message);
+    const status = error.response?.status;
+    if (status === 401) {
+      await handleTrackingAuthFailure('screenshot-upload');
+    } else {
+      console.error('Error uploading screenshot after retries:', error.message);
+    }
     throw error;
   }
 }
@@ -2096,9 +2281,12 @@ async function sendActivityBatch() {
       console.error('Server response:', JSON.stringify(error.response.data));
     }
 
-    // Only re-queue on network/server errors, not client errors (4xx will always fail)
-    if (!status || status >= 500) {
+    // Re-queue on network/server errors and auth errors (token can be refreshed)
+    if (!status || status >= 500 || status === 401) {
       activityBuffer = [...activitiesToSend, ...activityBuffer].slice(0, 100);
+      if (status === 401) {
+        await handleTrackingAuthFailure('activity-batch');
+      }
     } else {
       console.error('Client error - discarding batch (would always fail)');
     }
@@ -2140,7 +2328,12 @@ async function sendHeartbeat() {
       );
     }, 2); // Only 2 retries for heartbeat (less critical)
   } catch (error) {
-    console.error('Error sending heartbeat:', error.message);
+    const status = error.response?.status;
+    if (status === 401) {
+      await handleTrackingAuthFailure('heartbeat');
+    } else {
+      console.error('Error sending heartbeat:', error.message);
+    }
   }
 }
 

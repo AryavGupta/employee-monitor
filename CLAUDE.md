@@ -69,9 +69,11 @@ Never commit `.env`. See `.env.example`.
 
 ## Auth Architecture
 
-- JWT issued on `/api/auth/login` with `{ userId, email, role, teamId }`, signed via `JWT_SECRET`, 24h expiry.
+- JWT issued on `/api/auth/login` with `{ userId, email, role }`, signed via `JWT_SECRET`, 24h expiry.
+- **Token refresh:** `POST /api/auth/refresh` accepts valid or recently-expired tokens (up to 7 days), verifies user is active, issues new 24h token. Desktop app calls this proactively (5 min before expiry) and reactively (on 401).
+- **Desktop re-auth:** Stored credentials include encrypted email/password. On token expiry: tries `/refresh` first, then re-login, then pauses tracking + shows login after 3 consecutive failures.
+- `authenticateToken` middleware (`api/routes/auth.js`) validates `Authorization: Bearer <token>`. Returns **401** for expired/invalid tokens, **403** for insufficient permissions.
 - Dashboard stores token in `localStorage`; desktop in encrypted `electron-store`.
-- `authenticateToken` middleware (`api/middleware/auth.js`) validates `Authorization: Bearer <token>`.
 - Roles: `admin` (all), `manager` (own team), `employee` (self). Handlers check `req.user.role`/`teamId`.
 
 ---
@@ -105,6 +107,12 @@ One-liners. Check before proposing changes — don't repeat.
 - **Working hours = `total - idle`**, not `active - idle` (active already excludes idle).
 - **Presence ≠ session state.** Determine "active now" by heartbeat staleness (90s), not `session.end_time IS NULL`. See `UserActivity.js` `effective_status` (active/idle/disconnected/logged_out).
 - **Night-shift crossing midnight:** use `shift_date` (date shift started), not `DATE(timestamp)`.
+
+### Auth & Token Lifecycle
+- **Token expiry causes silent total data loss** if not handled. Desktop app must: (1) proactively refresh before expiry, (2) reactively refresh on 401, (3) re-login with stored credentials as fallback, (4) pause tracking + show login after 3 consecutive auth failures.
+- **`authenticateToken` returns 401, not 403, for expired tokens.** 403 is reserved for valid-token-insufficient-permissions. Desktop app uses this distinction.
+- **Never discard activity buffer on 401** — re-queue it. Auth failures are transient (token can be refreshed). Only discard on 400 (malformed data).
+- **`/api/auth/refresh` accepts tokens expired up to 7 days.** This covers weekend/holiday gaps where desktop app may sleep with an expired token.
 
 ### PowerShell from Node
 - **Always pass `-NoProfile -NonInteractive`** — user `$PROFILE` contaminates stdout.

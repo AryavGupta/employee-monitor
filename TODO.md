@@ -28,6 +28,7 @@
 - [x] Sleep/wake session handling (<5 min resumes, >5 min new session) - COMPLETED
 - [x] End session on suspend + always-fresh session on resume (fix cross-day inflation) - COMPLETED (Apr 2026)
 - [x] Fix "Unknown" application name in activity logs (PowerShell detection issue) - COMPLETED Apr 2026
+- [x] Token refresh + silent re-auth (fix 24h token expiry causing silent data loss) - COMPLETED Apr 2026
 - [ ] Add auto-update functionality
 - [ ] Add system tray tooltip with current status
 - [ ] Package for Mac (DMG) and Linux
