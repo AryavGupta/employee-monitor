@@ -128,6 +128,11 @@ function Sidebar({ user, onLogout, activePage }) {
             </Link>
           )}
 
+          <Link to="/attendance-logs" className={`nav-item ${activePage === 'attendance-logs' ? 'active' : ''}`}>
+            <span className="nav-icon"><Icons.Attendance /></span>
+            <span>Attendance & Logs</span>
+          </Link>
+
           <Link to="/screenshots" className={`nav-item ${activePage === 'screenshots' ? 'active' : ''}`}>
             <span className="nav-icon"><Icons.Screenshots /></span>
             <span>Screenshots</span>
@@ -136,11 +141,6 @@ function Sidebar({ user, onLogout, activePage }) {
           <Link to="/analytics" className={`nav-item ${activePage === 'analytics' ? 'active' : ''}`}>
             <span className="nav-icon"><Icons.Analytics /></span>
             <span>Analytics</span>
-          </Link>
-
-          <Link to="/attendance-logs" className={`nav-item ${activePage === 'attendance-logs' ? 'active' : ''}`}>
-            <span className="nav-icon"><Icons.Attendance /></span>
-            <span>Attendance</span>
           </Link>
 
           {(user.role === 'admin' || user.role === 'team_manager') && (
