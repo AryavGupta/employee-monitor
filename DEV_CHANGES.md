@@ -4,6 +4,20 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-18 — Fix: night-shift double-attribution in virtual sessions
+
+**Problem:** After Phase 1.3, Neeraj (night shift 22:30-07:30) appeared in User Activity for Apr 18 with login 12:00 AM, no logout, status Active. His real session was Apr 17 22:47 → Apr 18 06:59 (correctly shown in Apr 17 Shift Attendance as Night Shift 8h 11m). Apr 18 should not show Neeraj at all until he starts his Apr 18 night shift at 22:30.
+
+**Root cause (my bug from Phase 1.3):** the `has_session` CTE filtered sessions by `start_time IN window`. Neeraj's session started before Apr 18 00:00 IST (= Apr 17 18:30 UTC), so the CTE missed it → synthesis triggered → virtual row built from his overnight activity_logs that bled into Apr 18 morning.
+
+**Fix:** `admin-dashboard/api/routes/sessions.js` — change `has_session` to use PostgreSQL `OVERLAPS` operator with `COALESCE(end_time, NOW())` so any session whose interval intersects the date window is recognized, not just sessions that started in it. Now Neeraj's spanning session is detected → synthesis skips him → no false Apr 18 row.
+
+**Lesson noted:** for any cross-midnight workload (sessions, work attribution, attendance), `start_time-in-window` is wrong; need OVERLAPS or `shift_date` semantics. Already in CLAUDE.md as a general rule — I missed applying it during synthesis design. Will check explicitly for night-shift edge cases when adding date-range queries in future.
+
+**Verification:** Apr 17 Neeraj — real session shown (unchanged). Apr 18 Neeraj — no row (fixed). Gaurav/Sourabh Apr 18 — virtual rows still appear (no overlapping session, synthesis correctly triggers).
+
+---
+
 ## 2026-04-18 — User Activity tab: virtual sessions from evidence (Phase 1.3)
 
 **Problem:** After Phase 1, Shift Attendance showed login/logout correctly but the User Activity tab still showed "0 sessions found" because it calls `GET /api/sessions` which queries the sessions table directly.

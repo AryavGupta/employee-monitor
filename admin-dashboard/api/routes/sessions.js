@@ -230,8 +230,14 @@ router.get('/', authenticateToken, async (req, res) => {
 
       const synthResult = await pool.query(
         `WITH has_session AS (
+           -- Use interval OVERLAPS so a night-shift session that started
+           -- the previous day but ended inside this window is recognized.
+           -- Without this, an overnight session is missed by the main
+           -- start_time-in-window filter AND falsely triggers synthesis,
+           -- which then double-attributes the same work to the next
+           -- calendar day.
            SELECT DISTINCT user_id FROM sessions
-           WHERE start_time >= $1 AND start_time <= $2
+           WHERE (start_time, COALESCE(end_time, NOW())) OVERLAPS ($1::timestamptz, $2::timestamptz)
          )
          SELECT u.id AS user_id, u.full_name, u.email,
                 LEAST(
