@@ -587,55 +587,76 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
     const activity = activityResult.rows[0];
     const sessions = sessionsResult.rows;
 
-    // Compute first login / last logout from sessions
-    const firstLogin = sessions.length > 0 ? sessions[0].start_time : null;
+    // Evidence-of-life query (single round-trip). Sessions table is a hint, not
+    // load-bearing: when a session row is missing (startWorkSession() failed at
+    // app startup, or the desktop app was running before the shift window began),
+    // activity_logs + screenshots + last_heartbeat still prove when the user was
+    // working. Without this fallback, attendance shows "--"/0 even though active
+    // time is correct.
+    const evidenceResult = await pool.query(
+      `SELECT
+         LEAST(
+           (SELECT MIN(timestamp) FROM activity_logs
+              WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3),
+           (SELECT MIN(captured_at) FROM screenshots
+              WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3)
+         ) as first_evidence,
+         GREATEST(
+           (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
+           (SELECT MAX(timestamp) FROM activity_logs
+              WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3),
+           (SELECT MAX(captured_at) FROM screenshots
+              WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3)
+         ) as last_evidence`,
+      [targetUserId, shift_start_utc, shift_end_utc]
+    );
+    const evidenceFirst = evidenceResult.rows[0]?.first_evidence;
+    const evidenceLast = evidenceResult.rows[0]?.last_evidence;
+
+    const sessionFirstStart = sessions.length > 0 ? sessions[0].start_time : null;
     const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
-    const lastLogout = lastSession?.end_time || null;
     const hasActiveSession = sessions.some(s => s.effective_status === 'active' || s.effective_status === 'idle');
-    // "Open" = any session row with no end_time yet. This is wider than hasActiveSession:
-    // a zombie session that slipped past closeAllStaleSessions (heartbeat <5min so the
-    // gate didn't fire, but still not a live user) has end_time IS NULL and must be
-    // capped at evidence-of-life, not left at total=0.
+    // "Open" = any session row with no end_time yet. Wider than hasActiveSession:
+    // a zombie session that slipped past closeAllStaleSessions (heartbeat <5min)
+    // has end_time IS NULL and must be capped at evidence-of-life, not totalled
+    // as (now - start).
     const hasOpenSession = sessions.some(s => !s.end_time);
 
-    // For open sessions we must NOT use `now - firstLogin`, because the desktop app may
-    // have failed to send an end (lid close, crash, sleep without shutdown). Cap the
-    // wall-clock end at the last evidence-of-life within the shift window:
-    // GREATEST(last_heartbeat, MAX(activity_logs.timestamp), MAX(screenshots.captured_at)).
-    // Then bound by shift_end_utc so an active session never bleeds past midnight.
+    // Prefer earliest of session start and first evidence within the window.
+    const firstLogin = (sessionFirstStart && evidenceFirst)
+      ? (new Date(sessionFirstStart) < new Date(evidenceFirst) ? sessionFirstStart : evidenceFirst)
+      : (sessionFirstStart || evidenceFirst || null);
+
+    // Logout: only meaningful when the user is no longer live. A closed session
+    // wins; otherwise we let effectiveEndTs decide whether to surface evidenceLast
+    // as the logout time (when no session row exists and evidence is stale).
+    let lastLogout = (!hasOpenSession && lastSession?.end_time) ? lastSession.end_time : null;
+
     let effectiveEndTs = null;
     if (firstLogin) {
-      if (hasOpenSession) {
-        const evidenceResult = await pool.query(
-          `SELECT GREATEST(
-             (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
-             (SELECT MAX(timestamp) FROM activity_logs
-                WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3),
-             (SELECT MAX(captured_at) FROM screenshots
-                WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3)
-           ) as evidence_end`,
-          [targetUserId, shift_start_utc, shift_end_utc]
-        );
-        const evidence = evidenceResult.rows[0]?.evidence_end;
-        const now = new Date();
-        const shiftEnd = new Date(shift_end_utc);
-        const first = new Date(firstLogin);
-        // 90s grace so a currently-live user still reads as "now".
-        const LIVE_GRACE_MS = 90 * 1000;
+      const now = new Date();
+      const shiftEnd = new Date(shift_end_utc);
+      const first = new Date(firstLogin);
+      const LIVE_GRACE_MS = 90 * 1000;
+
+      if (lastLogout && !hasOpenSession) {
+        effectiveEndTs = new Date(lastLogout);
+      } else if (evidenceLast) {
         let candidate;
-        if (evidence && (now - new Date(evidence)) <= LIVE_GRACE_MS) {
-          candidate = now;
-        } else if (evidence) {
-          candidate = new Date(evidence);
+        if ((now - new Date(evidenceLast)) <= LIVE_GRACE_MS) {
+          candidate = now; // user is currently live
         } else {
-          candidate = first;
+          candidate = new Date(evidenceLast);
+          // No live session AND evidence is stale → user has effectively logged out.
+          // Surface evidenceLast as the logout time so the UI shows it instead of "--".
+          if (!hasOpenSession && !hasActiveSession) lastLogout = candidate.toISOString();
         }
         if (candidate > shiftEnd) candidate = shiftEnd;
         if (candidate > now) candidate = now;
         if (candidate < first) candidate = first;
         effectiveEndTs = candidate;
       } else {
-        effectiveEndTs = new Date(lastLogout || firstLogin);
+        effectiveEndTs = first;
       }
     }
 
@@ -774,8 +795,6 @@ router.get('/shift-attendance/export', authenticateToken, async (req, res) => {
         [uid, shift_start_utc, shift_end_utc]
       );
 
-      if (sessionsResult.rows.length === 0) continue;
-
       // Get all activity logs for this shift to compute per-session idle/active from actual data
       const activityResult = await pool.query(
         `SELECT timestamp, duration_seconds, is_idle
@@ -786,7 +805,54 @@ router.get('/shift-attendance/export', authenticateToken, async (req, res) => {
       );
       const activities = activityResult.rows;
 
-      for (const s of sessionsResult.rows) {
+      // If no session row exists, fall back to evidence-of-life so the user
+      // still appears in the export. Synthesize a single virtual session from
+      // earliest/latest activity + screenshot + heartbeat within the shift.
+      let sessionRows = sessionsResult.rows;
+      if (sessionRows.length === 0) {
+        const evidenceRes = await pool.query(
+          `SELECT
+             LEAST(
+               (SELECT MIN(timestamp) FROM activity_logs
+                  WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3),
+               (SELECT MIN(captured_at) FROM screenshots
+                  WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3)
+             ) as first_evidence,
+             GREATEST(
+               (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
+               (SELECT MAX(timestamp) FROM activity_logs
+                  WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3),
+               (SELECT MAX(captured_at) FROM screenshots
+                  WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3)
+             ) as last_evidence`,
+          [uid, shift_start_utc, shift_end_utc]
+        );
+        const ef = evidenceRes.rows[0]?.first_evidence;
+        const el = evidenceRes.rows[0]?.last_evidence;
+        if (!ef) continue; // genuinely no data for this user — skip
+        const now = new Date();
+        const shiftEndDate = new Date(shift_end_utc);
+        const LIVE_GRACE_MS = 90 * 1000;
+        const isLive = el && (now - new Date(el)) <= LIVE_GRACE_MS;
+        let virtualEnd;
+        if (isLive) {
+          virtualEnd = null; // currently live → leave end_time null so display reads "Active"
+        } else {
+          let cap = el ? new Date(el) : new Date(ef);
+          if (cap > shiftEndDate) cap = shiftEndDate;
+          if (cap > now) cap = now;
+          virtualEnd = cap;
+        }
+        sessionRows = [{
+          start_time: ef,
+          end_time: virtualEnd,
+          duration_seconds: null,
+          is_active: isLive,
+          last_heartbeat: el
+        }];
+      }
+
+      for (const s of sessionRows) {
         const sessionStart = new Date(s.start_time).getTime();
         const sessionEnd = s.end_time ? new Date(s.end_time).getTime() : Date.now();
         // Sum activity logs that fall within this session's time range

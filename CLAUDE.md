@@ -107,6 +107,7 @@ One-liners. Check before proposing changes — don't repeat.
 - **Working hours = `total - idle`**, not `active - idle` (active already excludes idle).
 - **Presence ≠ session state.** Determine "active now" by heartbeat staleness (90s), not `session.end_time IS NULL`. See `UserActivity.js` `effective_status` (active/idle/disconnected/logged_out).
 - **Night-shift crossing midnight:** use `shift_date` (date shift started), not `DATE(timestamp)`.
+- **Attendance must derive from evidence-of-life**, not just `sessions` table. `startWorkSession()` can fail silently — fall back to `LEAST/GREATEST` of `activity_logs.timestamp` + `screenshots.captured_at` + `user_presence.last_heartbeat`. See `reports.js /shift-attendance`.
 
 ### Auth & Token Lifecycle
 - **Token expiry causes silent total data loss** if not handled. Desktop app must: (1) proactively refresh before expiry, (2) reactively refresh on 401, (3) re-login with stored credentials as fallback, (4) pause tracking + show login after 3 consecutive auth failures.

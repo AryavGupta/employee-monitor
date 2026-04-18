@@ -8,6 +8,52 @@
 
 ## Currently Pending
 
+### P0 — Sessions table not populating (root cause of Apr 18 attendance issue)
+
+Phase 1 (Apr 18) restored attendance UI by deriving from evidence-of-life. The upstream issue — `sessions` table getting zero new rows for the entire org on Apr 18 — is still present. Phase 2 fixes the desktop-app side. See `DEV_CHANGES.md` for Phase 1 context.
+
+**Phase 2 — Desktop app session-create reliability (requires installer rebuild):**
+- [ ] Add `timeout: 10000` to `startWorkSession()` axios call (`desktop-app/main.js:2366`). It's the only axios call in the file without a timeout — if Vercel hangs, the await blocks forever and tracking never starts (this is what stranded Sanyam in heartbeat-only mode on Apr 18).
+- [ ] Reorder `startTrackingNow()` (`desktop-app/main.js:1444-1456`): start `startActivityTracking()` / `startHeartbeat()` / `captureScreenshot()` / `setInterval(captureScreenshot, ...)` BEFORE awaiting `startWorkSession()`. Session creation must NOT gate tracking.
+- [ ] Retry-with-backoff in `startWorkSession()`: 3 attempts at 0s/5s/15s (mirror `endWorkSession()` pattern at `main.js:2397-2425`).
+- [ ] Session reconciliation tick: every 5 min, if `isTracking && !currentSessionId`, retry `startWorkSession()`. Heals mid-day failures without restart.
+
+**Phase 2.5 — Telemetry:**
+- [ ] New endpoint `POST /api/system/event` for desktop-app failure telemetry. Log session-create failures with HTTP status + retry count to a `system_events` table. Without this, the next sessions outage is debug-blind.
+
+**Diagnostic SQL (read-only) — run before Phase 2 to confirm scope:**
+```sql
+-- Per-user: who has activity_logs but no session today?
+WITH today_act AS (
+  SELECT user_id, MIN(timestamp) AS first_act, COUNT(*) AS n
+  FROM activity_logs
+  WHERE timestamp >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date AT TIME ZONE 'Asia/Kolkata'
+  GROUP BY user_id
+),
+today_ses AS (
+  SELECT user_id, COUNT(*) AS n FROM sessions
+  WHERE start_time >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date AT TIME ZONE 'Asia/Kolkata'
+  GROUP BY user_id
+)
+SELECT u.full_name, a.n AS activity_rows, COALESCE(s.n, 0) AS session_rows,
+       a.first_act AT TIME ZONE 'Asia/Kolkata' AS first_act_ist
+FROM today_act a JOIN users u ON u.id = a.user_id
+LEFT JOIN today_ses s ON s.user_id = a.user_id
+ORDER BY a.first_act;
+```
+
+### P1 — Dashboard truthfulness (Phase 3)
+
+- [ ] **"Active Time" column on Dashboard is misleading.** `Dashboard.js:206` renders `formatDistanceToNow(emp.last_heartbeat)` — that's "time since last heartbeat", not cumulative active time. Either query real cumulative active_seconds from `activity_logs` for today via `/api/presence/online`, or remove the column (redundant with User Activity tab).
+- [ ] **"Active" badge is heartbeat-only.** Shows green for users whose tracking is silently broken (Sanyam Apr 18 case). Split `effective_status` in `presence.js` into `'tracking'` (heartbeat fresh AND `activity_log` within last 5 min) vs `'online_no_tracking'` (heartbeat fresh, no recent activity). Update badge labels in `Dashboard.js:49-57`.
+
+### P2 — Tech debt around sessions
+
+- [ ] `startWorkSession()` returns `null` on failure with no caller awareness — `startTrackingNow()` doesn't react. Consider returning a status enum.
+- [ ] `closeStaleSessionsForUser` is called inside `/sessions/start` (`sessions.js:67`); if it errors, the INSERT may roll back. Wrap in try/catch so the INSERT survives a cleanup failure.
+- [ ] `/api/sessions` filters strictly by `start_time` window — sessions spanning midnight are visible only on their start day. Match by overlap with the day window for the User Activity tab.
+- [ ] Server-side session-create errors are silent in Vercel logs (`console.error` only). Bump to a structured log so log search is useful.
+
 ### Performance Improvements
 - [ ] Implement frontend caching (SWR/React Query) for API responses
 - [ ] Add pagination to activity logs list view
