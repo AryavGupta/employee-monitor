@@ -502,6 +502,30 @@ function AttendanceLogs({ user, onLogout }) {
                       <div className="al-stat-value idle">{formatDuration(overtimeData.summary.idle_seconds)}</div>
                     </div>
                   </div>
+
+                  {overtimeData.sessions?.length > 1 && (
+                    <div className="al-sessions">
+                      <h4>Sessions ({overtimeData.sessions.length})</h4>
+                      <div className={overtimeData.sessions.length > 4 ? 'al-sessions-scroll' : ''}>
+                        <table className="al-table">
+                          <thead>
+                            <tr><th>#</th><th>Login</th><th>Logout</th><th>Duration</th><th>Status</th></tr>
+                          </thead>
+                          <tbody>
+                            {overtimeData.sessions.map((s, i) => (
+                              <tr key={s.id}>
+                                <td>{i + 1}</td>
+                                <td>{format(new Date(s.start_time), 'hh:mm a')}</td>
+                                <td>{s.end_time ? format(new Date(s.end_time), 'hh:mm a') : 'Active'}</td>
+                                <td>{formatDuration(s.duration_seconds)}</td>
+                                <td><span className={`al-status ${s.effective_status}`}>{s.effective_status.replace('_', ' ')}</span></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
