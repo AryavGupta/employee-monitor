@@ -289,6 +289,8 @@
 .badge-offline::before { background: #94a3b8; }
 .badge-disconnected { background: #fef2f2; color: #dc2626; }
 .badge-disconnected::before { background: #ef4444; }
+.badge-logged-out { background: #f8fafc; color: #475569; }
+.badge-logged-out::before { background: #94a3b8; }
 
 .ua-idle-hint {
   margin-left: 6px;

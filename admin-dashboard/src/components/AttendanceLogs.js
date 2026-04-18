@@ -19,6 +19,10 @@ function AttendanceLogs({ user, onLogout }) {
   // Shift attendance
   const [shiftDate, setShiftDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [shiftData, setShiftData] = useState(null);
+  // Overtime attendance returned by /api/reports/shift-attendance/overtime — same
+  // shape as shiftData but for the post-shift window. Rendered as a second card
+  // when there's any activity in the window.
+  const [overtimeData, setOvertimeData] = useState(null);
   const [shiftLoading, setShiftLoading] = useState(false);
 
   // Activity logs
@@ -52,7 +56,9 @@ function AttendanceLogs({ user, onLogout }) {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Fetch shift attendance
+  // Fetch shift attendance — fires both regular and overtime endpoints in parallel
+  // so the overtime block can render in the same render pass and CSV export can
+  // include both sections without an extra round-trip.
   const fetchShiftAttendance = useCallback(async () => {
     if (!selectedUserId) return;
     setShiftLoading(true);
@@ -60,10 +66,20 @@ function AttendanceLogs({ user, onLogout }) {
       const token = localStorage.getItem('token');
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const params = new URLSearchParams({ userId: selectedUserId, shiftDate, timezone: tz });
-      const res = await axios.get(`${API_URL}/api/reports/shift-attendance?${params}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.data.success) setShiftData(res.data.data);
+      const headers = { Authorization: `Bearer ${token}` };
+      const [regularRes, overtimeRes] = await Promise.all([
+        axios.get(`${API_URL}/api/reports/shift-attendance?${params}`, { headers }),
+        // Don't let overtime endpoint failure poison the regular fetch — pre-migration
+        // servers will 404 and that's expected.
+        axios.get(`${API_URL}/api/reports/shift-attendance/overtime?${params}`, { headers })
+          .catch(err => ({ data: { success: false, _err: err.message } }))
+      ]);
+      if (regularRes.data.success) setShiftData(regularRes.data.data);
+      if (overtimeRes.data.success) {
+        setOvertimeData(overtimeRes.data.data);
+      } else {
+        setOvertimeData(null);
+      }
     } catch (err) {
       console.error('Error fetching shift attendance:', err);
     } finally {
@@ -178,20 +194,59 @@ function AttendanceLogs({ user, onLogout }) {
   };
 
   // Export shift attendance CSV
-  const exportShiftCSV = async () => {
-    if (!selectedUserId) return;
+  // Client-side CSV export — emits up to two rows per day in the format the
+  // user asked for: a Regular row and (when overtime activity exists) an
+  // Extra Hours row, with the same columns as the dashboard summary cards.
+  // Per feedback_csv_export.md: build client-side using same formatting as the UI.
+  const exportShiftCSV = () => {
+    if (!selectedUserId || !shiftData) return;
     setExportingShift(true);
     try {
-      const token = localStorage.getItem('token');
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const params = new URLSearchParams({ userId: selectedUserId, shiftDate, timezone: tz });
+      const escape = (v) => {
+        if (v == null) return '';
+        const s = String(v);
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const fmtTime = (iso) => iso ? format(new Date(iso), 'hh:mm a') : '--';
+      const fmtDur = (secs) => formatDuration(secs || 0);
+      const userEmail = users.find(u => u.id === selectedUserId)?.email || '';
+      const dateLabel = format(new Date(shiftDate), 'd MMM yyyy');
+      const headerCols = ['User Name', 'Email ID', 'Date', 'Login', 'Logout', 'Total Hours', 'Idle Time', 'Active Time', 'Total Working Hours'];
 
-      const res = await axios.get(`${API_URL}/api/reports/shift-attendance/export?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        responseType: 'blob'
-      });
+      const buildRow = (summary) => {
+        const total = summary?.total_seconds || 0;
+        const active = summary?.active_seconds || 0;
+        const idle = summary?.idle_seconds || 0;
+        const working = Math.max(total - idle, 0);
+        return [
+          selectedUserName,
+          userEmail,
+          dateLabel,
+          fmtTime(summary?.first_login),
+          summary?.is_active ? 'Active' : fmtTime(summary?.last_logout),
+          fmtDur(total),
+          fmtDur(idle),
+          fmtDur(active),
+          fmtDur(working)
+        ].map(escape).join(',');
+      };
 
-      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const lines = [];
+      lines.push('Reports');
+      lines.push(headerCols.join(','));
+      lines.push(buildRow(shiftData.summary));
+
+      const otSummary = overtimeData?.summary;
+      const hasOvertime = otSummary && (otSummary.total_seconds > 0 || otSummary.activity_count > 0);
+      if (hasOvertime) {
+        lines.push('');
+        lines.push('Extra Hours');
+        lines.push(headerCols.join(','));
+        lines.push(buildRow(otSummary));
+      }
+
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `shift-attendance-${selectedUserName.replace(/\s+/g, '-')}-${shiftDate}.csv`;
@@ -411,6 +466,43 @@ function AttendanceLogs({ user, onLogout }) {
                 </>
               ) : (
                 <div className="al-empty">No attendance recorded for this shift</div>
+              )}
+
+              {/* Extra Hours / Overtime card — only renders when post-shift activity exists.
+                  Mirrors the Regular block's stat layout so the two read consistently. */}
+              {overtimeData && (overtimeData.summary?.total_seconds > 0 || overtimeData.summary?.activity_count > 0) && (
+                <div className="al-overtime-block">
+                  <div className="al-shift-header">
+                    <h3>Extra Hours</h3>
+                    <span className="al-shift-label">Post-shift tracking</span>
+                  </div>
+                  <div className="al-stats-grid">
+                    <div className="al-stat">
+                      <div className="al-stat-label">Login</div>
+                      <div className="al-stat-value">
+                        {overtimeData.summary.first_login ? format(new Date(overtimeData.summary.first_login), 'hh:mm a') : '--'}
+                      </div>
+                    </div>
+                    <div className="al-stat">
+                      <div className="al-stat-label">Logout</div>
+                      <div className="al-stat-value">
+                        {overtimeData.summary.is_active ? 'Active' : overtimeData.summary.last_logout ? format(new Date(overtimeData.summary.last_logout), 'hh:mm a') : '--'}
+                      </div>
+                    </div>
+                    <div className="al-stat">
+                      <div className="al-stat-label">Total Hours</div>
+                      <div className="al-stat-value">{formatDuration(overtimeData.summary.total_seconds)}</div>
+                    </div>
+                    <div className="al-stat">
+                      <div className="al-stat-label">Active Time</div>
+                      <div className="al-stat-value active">{formatDuration(overtimeData.summary.active_seconds)}</div>
+                    </div>
+                    <div className="al-stat">
+                      <div className="al-stat-label">Idle Time</div>
+                      <div className="al-stat-value idle">{formatDuration(overtimeData.summary.idle_seconds)}</div>
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
 

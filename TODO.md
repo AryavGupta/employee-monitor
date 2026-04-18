@@ -8,6 +8,31 @@
 
 ## Currently Pending
 
+### P0 — Overtime / Extra Hours mode (deploy steps)
+
+Code complete (see DEV_CHANGES.md 2026-04-18 entry). To finish rollout:
+
+- [ ] Apply migration: `psql $DATABASE_URL -f admin-dashboard/migrations/003_overtime_support.sql` (or run via Supabase SQL editor).
+- [ ] Push to `main` so Vercel deploys backend + frontend.
+- [ ] Per `feedback_version_bump.md`: bump `desktop-app/package.json` patch version, then `npm run build:desktop`. Distribute new installer.
+- [ ] Per-team enable: open Teams → settings → check "Allow tracking outside working hours (Extra Hours mode)" for teams that need it.
+
+**Validation checklist** (run after each deploy step):
+- [ ] Migration: `\d sessions` shows `overtime`, `\d team_monitoring_settings` shows `track_outside_hours`, `INSERT user_presence (status='logged_out')` succeeds.
+- [ ] Backend: `GET /api/presence/online` returns `effective_status='idle'` for a user with fresh heartbeat but no activity in last 90s; `GET /api/reports/shift-attendance/overtime?userId=X&shiftDate=YYYY-MM-DD` responds with the same shape as `/shift-attendance`.
+- [ ] Desktop (set test team's working hours to current minute ± 5min, `track_outside_hours=true`):
+  - [ ] In-hours: regular session created with `overtime=false`.
+  - [ ] At shift end: console shows close → logged_out push → new overtime session opens. Dashboard flips through Logged Out → back to Active within ~30s.
+  - [ ] Toggle `track_outside_hours=false` mid-overtime: within 30s desktop pauses + flips to Logged Out (settings_version detection works).
+  - [ ] Cold-start outside hours, overtime off: NO heartbeat, presence row stays stale → user appears Logged Out / Offline. Confirms the Neeraj fix.
+  - [ ] Cold-start outside hours, overtime on: full tracking starts with overtime=true.
+- [ ] Frontend: AttendanceLogs page shows Extra Hours card when overtime activity exists; CSV export contains "Reports" + "Extra Hours" sections matching the image.
+
+**Follow-ups (non-blocking):**
+- [ ] If `pg_stat_statements` shows the new `EXISTS` subquery in `/presence/online` is hot, add a denormalized `user_presence.last_activity_at TIMESTAMPTZ` column updated whenever `activity_logs` is inserted; replace the EXISTS with a direct comparison.
+- [ ] Old `/api/reports/shift-attendance/export` server endpoint is now unused (replaced by client-side builder). Decide whether to delete or keep for API consumers.
+- [ ] Verify Analytics page `overtimeFilter` still works correctly now that activity rows are properly tagged. Likely fine — feature was already wired, just had no real data.
+
 ### P0 — Sessions table not populating (root cause of Apr 18 attendance issue)
 
 Phase 1 (Apr 18) restored attendance UI by deriving from evidence-of-life. The upstream issue — `sessions` table getting zero new rows for the entire org on Apr 18 — is still present. Phase 2 fixes the desktop-app side. See `DEV_CHANGES.md` for Phase 1 context.

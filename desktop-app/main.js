@@ -47,7 +47,12 @@ const CONFIG = {
   RETRY_DELAY: 1000, // Base delay in ms, will be exponentially increased
   WORKING_DAYS: [1, 2, 3, 4, 5], // Default Mon-Fri, overridden by team settings
   WORKING_HOURS_START: null,
-  WORKING_HOURS_END: null
+  WORKING_HOURS_END: null,
+  // Per-team toggle (synced via team settings). When true and the user is outside
+  // the configured shift window, the desktop continues full tracking (screenshots,
+  // activity, heartbeat) but tags the session as overtime=true. When false, tracking
+  // pauses and presence flips to logged_out at shift end.
+  TRACK_OUTSIDE_HOURS: false
 };
 
 // Token refresh state
@@ -234,6 +239,12 @@ let heartbeatInterval;
 let isTracking = false;
 let isQuitting = false;
 let currentSessionId = null;
+// Tracks the overtime flag of the in-flight session so transitions know when to
+// open/close at the shift boundary. Reset to false on session-end.
+let currentSessionIsOvertime = false;
+// Last settings_version returned by the heartbeat. When the server reports a newer
+// version we re-fetch /api/teams/:id/settings; in steady state this adds zero calls.
+let lastSettingsVersion = null;
 let lastActivityTime = Date.now();
 let activityBuffer = [];
 let totalActiveSeconds = 0;
@@ -671,7 +682,10 @@ function setupPowerMonitorHandlers() {
     if (CONFIG.USER_TOKEN) {
       axios.post(
         `${CONFIG.API_URL}/api/presence/heartbeat`,
-        { status: 'away', reason: 'system_sleep' },
+        // 'away' was never in the presence CHECK constraint (online/idle/offline only)
+        // and silently failed at the DB layer. Use 'offline' — session has already
+        // been ended by the suspend handler, so this is just a status nudge.
+        { status: 'offline', reason: 'system_sleep' },
         { headers: { Authorization: `Bearer ${CONFIG.USER_TOKEN}` }, timeout: 3000 }
       ).catch(() => {}); // Ignore errors, system is sleeping
     }
@@ -807,9 +821,13 @@ function setupPowerMonitorHandlers() {
         }
       ).catch(() => {});
 
+      // Use 'logged_out' (not 'offline') so the dashboard distinguishes a clean
+      // shutdown from a network blip. The status is now a first-class enum value
+      // (migration 003); old servers will normalize unknown values to 'online' so
+      // a graceful fallback path exists.
       axios.post(
         `${CONFIG.API_URL}/api/presence/heartbeat`,
-        { status: 'offline', reason: 'system_shutdown' },
+        { status: 'logged_out', reason: 'system_shutdown' },
         { headers: { Authorization: `Bearer ${CONFIG.USER_TOKEN}` }, timeout: 3000 }
       ).catch(() => {});
     }
@@ -1175,7 +1193,16 @@ async function fetchTeamSettings() {
             CONFIG.WORKING_HOURS_END = teamSettings.working_hours_end;
             CONFIG.WORKING_DAYS = teamSettings.working_days || [1, 2, 3, 4, 5];
             console.log(`Working hours: ${CONFIG.WORKING_HOURS_START} - ${CONFIG.WORKING_HOURS_END}, days: ${CONFIG.WORKING_DAYS}`);
+          } else {
+            // Settings exist but hours cleared — treat as "no working hours configured"
+            CONFIG.WORKING_HOURS_START = null;
+            CONFIG.WORKING_HOURS_END = null;
           }
+
+          // Per-team toggle for Extra Hours mode (added in migration 003).
+          // Defaults to false on older servers that don't return the field.
+          CONFIG.TRACK_OUTSIDE_HOURS = teamSettings.track_outside_hours === true;
+          console.log(`Extra hours tracking: ${CONFIG.TRACK_OUTSIDE_HOURS ? 'ON' : 'OFF'}`);
         }
       } catch (e) {
         console.log('Could not fetch team settings:', e.message);
@@ -1632,16 +1659,60 @@ function shouldTrackNow() {
 // Working hours enforcement interval
 let workingHoursCheckInterval = null;
 
-// Check working hours and pause/resume tracking accordingly
+// Check working hours and pause/resume/transition tracking accordingly.
+// Four valid transitions:
+//   in-hours, not tracking          → startTrackingNow() [regular]
+//   out-of-hours, tracking regular  → CONFIG.TRACK_OUTSIDE_HOURS ? transitionToOvertime() : pauseTrackingForLogout()
+//   in-hours, tracking overtime     → transitionToRegular()
+//   out-of-hours, not tracking, overtime enabled (toggled on) → startTrackingNow({ overtime: true })
 async function checkWorkingHoursAndToggle() {
   const shouldTrack = shouldTrackNow();
 
   if (shouldTrack && !isTracking) {
     console.log('Within working hours — starting tracking');
     await startTrackingNow();
-  } else if (!shouldTrack && isTracking) {
-    console.log('Outside working hours — pausing tracking');
-    await pauseTrackingNow();
+  } else if (shouldTrack && isTracking && currentSessionIsOvertime) {
+    // Returned to regular hours mid-overtime (next-day shift start)
+    console.log('Working hours started — transitioning from overtime to regular');
+    await transitionToRegular();
+  } else if (!shouldTrack && isTracking && !currentSessionIsOvertime) {
+    if (CONFIG.TRACK_OUTSIDE_HOURS) {
+      console.log('Working hours ended — transitioning to Extra Hours');
+      await transitionToOvertime();
+    } else {
+      console.log('Working hours ended — pausing tracking and marking logged out');
+      await pauseTrackingForLogout();
+    }
+  } else if (!shouldTrack && !isTracking && CONFIG.TRACK_OUTSIDE_HOURS) {
+    // Admin enabled overtime mid-shift (after we'd already paused at shift end)
+    console.log('Extra hours enabled — starting overtime tracking');
+    await startTrackingNow({ overtime: true });
+  } else if (!shouldTrack && isTracking && currentSessionIsOvertime && !CONFIG.TRACK_OUTSIDE_HOURS) {
+    // Admin disabled overtime while overtime session was running
+    console.log('Extra hours disabled — pausing tracking');
+    await pauseTrackingForLogout();
+  }
+}
+
+// Push an immediate logged_out heartbeat so the dashboard flips to "Logged Out"
+// without waiting on the 90s heartbeat-staleness gate. Best-effort — failure is
+// not fatal because the heartbeat will eventually go stale anyway.
+async function pushLoggedOutSignal() {
+  if (!CONFIG.USER_TOKEN) return;
+  try {
+    await axios.post(
+      `${CONFIG.API_URL}/api/presence/heartbeat`,
+      { status: 'logged_out', idleSeconds: 0 },
+      {
+        headers: {
+          'Authorization': `Bearer ${CONFIG.USER_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 5000
+      }
+    );
+  } catch (err) {
+    console.warn('Failed to push logged_out signal:', err.message);
   }
 }
 
@@ -1653,11 +1724,12 @@ async function checkWorkingHoursAndToggle() {
 // session creation here was the Apr 18 Sanyam-class failure: a hung axios
 // call left isTracking=true but no intervals scheduled, so the desktop
 // silently dropped to heartbeat-only mode for the rest of the day.
-async function startTrackingNow() {
+async function startTrackingNow({ overtime = false } = {}) {
   if (isTracking) return;
 
   isTracking = true;
-  console.log('Starting screenshot capture...');
+  currentSessionIsOvertime = overtime === true;
+  console.log(`Starting screenshot capture${overtime ? ' (Extra Hours)' : ''}...`);
   updateTrayMenu();
 
   startActivityTracking();
@@ -1666,14 +1738,16 @@ async function startTrackingNow() {
   screenshotInterval = setInterval(captureScreenshot, CONFIG.SCREENSHOT_INTERVAL);
 
   // Fire-and-forget. startWorkSession has its own retry/timeout.
-  startWorkSession().catch(err => console.error('startWorkSession threw:', err?.message));
+  startWorkSession({ overtime }).catch(err => console.error('startWorkSession threw:', err?.message));
 }
 
-// Internal: pause tracking (called by working hours check)
+// Internal: pause tracking (called by working hours check) — preserved for backwards
+// compatibility with callers (e.g. powerMonitor handlers). Quietly stops everything;
+// does NOT push a logged_out signal. Use pauseTrackingForLogout when intent is shift end.
 async function pauseTrackingNow() {
   if (!isTracking) return;
 
-  console.log('Pausing tracking (outside working hours)...');
+  console.log('Pausing tracking...');
 
   if (screenshotInterval) {
     clearInterval(screenshotInterval);
@@ -1684,7 +1758,55 @@ async function pauseTrackingNow() {
   stopHeartbeat();
 
   isTracking = false;
+  currentSessionIsOvertime = false;
   updateTrayMenu();
+}
+
+// Shift end with overtime disabled: same as pauseTrackingNow but pushes a
+// logged_out heartbeat first so the dashboard flips immediately. Order matters
+// — push status BEFORE stopHeartbeat so the request completes.
+async function pauseTrackingForLogout() {
+  if (!isTracking) return;
+
+  if (screenshotInterval) {
+    clearInterval(screenshotInterval);
+    screenshotInterval = null;
+  }
+  stopActivityTracking();
+  await endWorkSession();
+  await pushLoggedOutSignal();
+  stopHeartbeat();
+
+  isTracking = false;
+  currentSessionIsOvertime = false;
+  updateTrayMenu();
+}
+
+// Regular → Extra Hours transition. Close the regular session, push a logged_out
+// signal so the dashboard shows the shift-end transition, then open a new
+// overtime session. Tracking intervals (screenshot/activity/heartbeat) keep
+// running — only the session row changes.
+async function transitionToOvertime() {
+  await endWorkSession();
+  await pushLoggedOutSignal();
+  // The reconciliation tick will retry if startWorkSession fails — fire-and-forget
+  // so the dashboard's logged_out state isn't gated on session-create latency.
+  currentSessionIsOvertime = true;
+  startWorkSession({ overtime: true }).catch(err =>
+    console.error('Overtime session start failed:', err?.message)
+  );
+}
+
+// Extra Hours → Regular transition. Symmetric to transitionToOvertime; happens
+// when working hours start the next day while the overtime session is still
+// running. No logged_out push here — the user should appear continuously online
+// across the day boundary.
+async function transitionToRegular() {
+  await endWorkSession();
+  currentSessionIsOvertime = false;
+  startWorkSession({ overtime: false }).catch(err =>
+    console.error('Regular session start failed:', err?.message)
+  );
 }
 
 async function startScreenshotCapture() {
@@ -1696,10 +1818,16 @@ async function startScreenshotCapture() {
     const shouldTrack = shouldTrackNow();
     if (shouldTrack) {
       await startTrackingNow();
+    } else if (CONFIG.TRACK_OUTSIDE_HOURS) {
+      // Cold-start outside working hours with overtime mode enabled — start full
+      // tracking with overtime=true so screenshots/activity/heartbeat all run.
+      console.log('Outside working hours — starting Extra Hours tracking');
+      await startTrackingNow({ overtime: true });
     } else {
-      console.log('Outside working hours — tracking will start when work hours begin');
-      // Still send heartbeat so presence shows the user is online
-      startHeartbeat();
+      // Cold-start outside hours, overtime disabled. Do NOT send heartbeats —
+      // sending heartbeat-only made every laptop appear online forever (the
+      // Neeraj-2pm-bug). User legitimately should appear logged out.
+      console.log('Outside working hours, Extra Hours disabled — idle until shift starts');
     }
 
     // Periodically check if we need to start/stop based on working hours
@@ -2548,7 +2676,7 @@ async function sendHeartbeat() {
 
     const idleSeconds = getSystemIdleTime();
 
-    await apiCallWithRetry(async () => {
+    const response = await apiCallWithRetry(async () => {
       return axios.post(
         `${CONFIG.API_URL}/api/presence/heartbeat`,
         {
@@ -2567,6 +2695,19 @@ async function sendHeartbeat() {
         }
       );
     }, 2); // Only 2 retries for heartbeat (less critical)
+
+    // Settings change detection — server piggybacks settings_version on every heartbeat.
+    // We refetch the full settings only when the version increments (zero extra calls
+    // in steady state). Old servers omit the field → never refetch via this path.
+    const newVersion = response?.data?.settings_version;
+    if (newVersion != null && newVersion !== lastSettingsVersion) {
+      const previous = lastSettingsVersion;
+      lastSettingsVersion = newVersion;
+      if (previous != null) {
+        console.log(`Settings version changed (${previous} → ${newVersion}) — refreshing config`);
+        fetchTeamSettings().catch(err => console.warn('Settings refresh failed:', err.message));
+      }
+    }
   } catch (error) {
     const status = error.response?.status;
     if (status === 401) {
@@ -2605,7 +2746,7 @@ function stopHeartbeat() {
 // like startTrackingNow() don't get blocked. Without a timeout the previous
 // version could await forever on a Vercel cold-start hiccup, leaving tracking
 // permanently stuck in heartbeat-only mode (the Sanyam-class failure on Apr 18).
-async function startWorkSession() {
+async function startWorkSession({ overtime = false } = {}) {
   const attempts = [
     { delay: 0, timeout: 10000 },
     { delay: 5000, timeout: 10000 },
@@ -2618,7 +2759,10 @@ async function startWorkSession() {
     try {
       const response = await axios.post(
         `${CONFIG.API_URL}/api/sessions/start`,
-        { notes: `Session started from ${os.hostname()}` },
+        {
+          notes: `Session started from ${os.hostname()}${overtime ? ' (Extra Hours)' : ''}`,
+          overtime: overtime === true
+        },
         {
           headers: {
             'Authorization': `Bearer ${CONFIG.USER_TOKEN}`,
@@ -2630,9 +2774,10 @@ async function startWorkSession() {
 
       if (response.data.success) {
         currentSessionId = response.data.data.id;
+        currentSessionIsOvertime = overtime === true;
         totalActiveSeconds = 0;
         totalIdleSeconds = 0;
-        console.log('Work session started:', currentSessionId);
+        console.log(`Work session started${overtime ? ' (overtime)' : ''}:`, currentSessionId);
         return response.data;
       }
       // 2xx without success flag → don't retry, server logic decided no
@@ -2656,6 +2801,11 @@ async function startWorkSession() {
 async function endWorkSession() {
   if (!currentSessionId) return;
 
+  // Capture id locally — the regular→overtime transition starts a new session
+  // immediately after closing this one and we must not race the global out from
+  // under the new session.
+  const sessionIdToEnd = currentSessionId;
+
   // Send any remaining activity logs
   await sendActivityBatch();
 
@@ -2665,6 +2815,7 @@ async function endWorkSession() {
       const response = await axios.post(
         `${CONFIG.API_URL}/api/sessions/end`,
         {
+          sessionId: sessionIdToEnd,
           totalActiveTime: totalActiveSeconds,
           totalIdleTime: totalIdleSeconds,
           notes: `Session ended. Active: ${Math.round(totalActiveSeconds / 60)}min, Idle: ${Math.round(totalIdleSeconds / 60)}min`
@@ -2679,7 +2830,11 @@ async function endWorkSession() {
       );
 
       console.log('Work session ended');
-      currentSessionId = null;
+      // Only clear if no other code path has already started a new session.
+      if (currentSessionId === sessionIdToEnd) {
+        currentSessionId = null;
+        currentSessionIsOvertime = false;
+      }
       return response.data;
     } catch (error) {
       console.error(`Error ending work session (attempt ${attempt}/${maxRetries}):`, error.message);
@@ -2691,7 +2846,10 @@ async function endWorkSession() {
 
   // All retries failed — clear local state to avoid stale references
   console.error('Failed to end session after all retries. Server-side cleanup will handle it.');
-  currentSessionId = null;
+  if (currentSessionId === sessionIdToEnd) {
+    currentSessionId = null;
+    currentSessionIsOvertime = false;
+  }
   return null;
 }
 

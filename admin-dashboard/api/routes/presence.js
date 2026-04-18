@@ -3,12 +3,40 @@ const router = express.Router();
 const { authenticateToken, authorizeAdmin, authorizeAdminOrManager, getManagedTeamIds, getManagedUserIds } = require('./auth');
 const { closeAllStaleSessions } = require('./sessions');
 
+// Whitelist of presence statuses we accept from the client.
+// 'logged_out' is a first-class state added in migration 003 — used by the desktop
+// app at shift end (and on shutdown) so the dashboard can flip immediately
+// without waiting on the 90s heartbeat-staleness gate.
+const ALLOWED_PRESENCE_STATUSES = new Set(['online', 'idle', 'offline', 'logged_out']);
+
+// Computed presence status used everywhere a list/summary needs a single source-of-truth.
+// Rules (in order):
+//   1. Explicit 'logged_out' from the client (shift end / shutdown) wins.
+//   2. Stale heartbeat (>90s) → 'offline'.
+//   3. Heartbeat fresh AND a non-idle activity row in the last 90s → 'online'.
+//   4. Heartbeat fresh, no recent active work → 'idle'.
+// "Online" thus requires real activity; a heartbeat alone is not enough — that's the spec.
+const EFFECTIVE_STATUS_SQL = `
+  CASE
+    WHEN p.status = 'logged_out' THEN 'logged_out'
+    WHEN p.last_heartbeat <= NOW() - INTERVAL '90 seconds' THEN 'offline'
+    WHEN EXISTS (
+      SELECT 1 FROM activity_logs a
+      WHERE a.user_id = p.user_id
+        AND a.timestamp > NOW() - INTERVAL '90 seconds'
+        AND a.is_idle = false
+    ) THEN 'online'
+    ELSE 'idle'
+  END
+`;
+
 // Heartbeat - Desktop app sends this every 30 seconds
 router.post('/heartbeat', authenticateToken, async (req, res) => {
   try {
     const { status, currentApplication, windowTitle, currentUrl, sessionId, idleSeconds } = req.body;
     const userId = req.user.userId;
     const pool = req.app.locals.pool;
+    const safeStatus = ALLOWED_PRESENCE_STATUSES.has(status) ? status : 'online';
 
     // Upsert user presence (with idle_seconds if column exists)
     try {
@@ -24,7 +52,7 @@ router.post('/heartbeat', authenticateToken, async (req, res) => {
           session_id = $6,
           last_heartbeat = CURRENT_TIMESTAMP,
           idle_seconds = $7
-      `, [userId, status || 'online', currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null, idleSeconds ?? 0]);
+      `, [userId, safeStatus, currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null, idleSeconds ?? 0]);
     } catch (columnError) {
       // Fallback if idle_seconds column doesn't exist yet
       if (columnError.code === '42703') {
@@ -39,13 +67,46 @@ router.post('/heartbeat', authenticateToken, async (req, res) => {
             current_url = $5,
             session_id = $6,
             last_heartbeat = CURRENT_TIMESTAMP
-        `, [userId, status || 'online', currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null]);
+        `, [userId, safeStatus, currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null]);
       } else {
         throw columnError;
       }
     }
 
-    res.json({ success: true, message: 'Heartbeat received' });
+    // Piggyback team-settings version on the heartbeat response so the desktop
+    // app can detect and pull config changes without a dedicated polling timer.
+    // settings_version is the updated_at epoch (ms) — monotonic per row, cheap to compare.
+    let settingsVersion = null;
+    let trackOutsideHours = false;
+    try {
+      const cfgResult = await pool.query(
+        `SELECT
+           EXTRACT(EPOCH FROM tms.updated_at) * 1000 AS settings_version,
+           tms.track_outside_hours
+         FROM users u
+         LEFT JOIN team_monitoring_settings tms ON tms.team_id = u.team_id
+         WHERE u.id = $1
+         LIMIT 1`,
+        [userId]
+      );
+      if (cfgResult.rows.length > 0) {
+        const row = cfgResult.rows[0];
+        settingsVersion = row.settings_version != null ? Math.floor(Number(row.settings_version)) : null;
+        trackOutsideHours = !!row.track_outside_hours;
+      }
+    } catch (cfgErr) {
+      // Don't fail the heartbeat if settings lookup hiccups (e.g. pre-migration column missing)
+      if (cfgErr.code !== '42703') {
+        console.warn('Settings lookup in heartbeat failed:', cfgErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Heartbeat received',
+      settings_version: settingsVersion,
+      track_outside_hours: trackOutsideHours
+    });
   } catch (error) {
     console.error('Heartbeat error:', error);
     res.status(500).json({ success: false, message: 'Failed to update presence' });
@@ -69,10 +130,7 @@ router.get('/online', authenticateToken, authorizeAdminOrManager, async (req, re
         u.email,
         t.name as team_name,
         t.id as team_id,
-        CASE
-          WHEN p.last_heartbeat > NOW() - INTERVAL '90 seconds' THEN p.status
-          ELSE 'offline'
-        END as effective_status
+        ${EFFECTIVE_STATUS_SQL} as effective_status
       FROM user_presence p
       JOIN users u ON p.user_id = u.id
       LEFT JOIN teams t ON u.team_id = t.id
@@ -112,12 +170,13 @@ router.get('/summary', authenticateToken, authorizeAdminOrManager, async (req, r
     // Auto-close stale sessions so presence data is accurate
     try { await closeAllStaleSessions(pool); } catch (e) { /* non-critical */ }
 
-    // Single query instead of 2 separate queries
+    // Aggregate over the same effective_status definition used by /online so dashboard
+    // counts and per-user statuses can never disagree. logged_out rolls into offline_count.
     let query = `
       SELECT
-        COUNT(CASE WHEN p.last_heartbeat > NOW() - INTERVAL '90 seconds' AND p.status = 'online' THEN 1 END) as online_count,
-        COUNT(CASE WHEN p.last_heartbeat > NOW() - INTERVAL '90 seconds' AND p.status = 'idle' THEN 1 END) as idle_count,
-        COUNT(CASE WHEN p.last_heartbeat <= NOW() - INTERVAL '90 seconds' OR p.status = 'offline' THEN 1 END) as offline_count,
+        COUNT(CASE WHEN ${EFFECTIVE_STATUS_SQL} = 'online' THEN 1 END) as online_count,
+        COUNT(CASE WHEN ${EFFECTIVE_STATUS_SQL} = 'idle' THEN 1 END) as idle_count,
+        COUNT(CASE WHEN ${EFFECTIVE_STATUS_SQL} IN ('offline', 'logged_out') THEN 1 END) as offline_count,
         (SELECT COUNT(*) FROM users WHERE is_active = true{TOTAL_FILTER}) as total_users
       FROM user_presence p
       JOIN users u ON p.user_id = u.id
@@ -178,10 +237,7 @@ router.get('/user/:id', authenticateToken, async (req, res) => {
         u.full_name,
         u.email,
         t.name as team_name,
-        CASE
-          WHEN p.last_heartbeat > NOW() - INTERVAL '90 seconds' THEN p.status
-          ELSE 'offline'
-        END as effective_status
+        ${EFFECTIVE_STATUS_SQL} as effective_status
       FROM user_presence p
       JOIN users u ON p.user_id = u.id
       LEFT JOIN teams t ON u.team_id = t.id

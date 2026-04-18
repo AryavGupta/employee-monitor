@@ -61,16 +61,32 @@ router.post('/start', authenticateToken, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
     const userId = req.user.userId;
-    const { systemInfo } = req.body;
+    const { systemInfo, overtime } = req.body;
+    const isOvertime = overtime === true;
 
     // End any existing active sessions for this user
     await closeStaleSessionsForUser(pool, userId);
 
-    const result = await pool.query(
-      `INSERT INTO sessions (user_id, start_time, system_info)
-       VALUES ($1, CURRENT_TIMESTAMP, $2) RETURNING *`,
-      [userId, systemInfo ? JSON.stringify(systemInfo) : null]
-    );
+    // Try with overtime column; fall back if migration hasn't run yet (42703)
+    let result;
+    try {
+      result = await pool.query(
+        `INSERT INTO sessions (user_id, start_time, system_info, overtime)
+         VALUES ($1, CURRENT_TIMESTAMP, $2, $3) RETURNING *`,
+        [userId, systemInfo ? JSON.stringify(systemInfo) : null, isOvertime]
+      );
+    } catch (err) {
+      if (err.code === '42703') {
+        console.warn('sessions.overtime column missing — falling back. Run migration 003_overtime_support.sql.');
+        result = await pool.query(
+          `INSERT INTO sessions (user_id, start_time, system_info)
+           VALUES ($1, CURRENT_TIMESTAMP, $2) RETURNING *`,
+          [userId, systemInfo ? JSON.stringify(systemInfo) : null]
+        );
+      } else {
+        throw err;
+      }
+    }
 
     res.status(201).json({ success: true, message: 'Session started', data: result.rows[0] });
   } catch (error) {
@@ -84,47 +100,53 @@ router.post('/end', authenticateToken, async (req, res) => {
   try {
     const pool = req.app.locals.pool;
     const userId = req.user.userId;
-    const { totalActiveTime, totalIdleTime, notes } = req.body;
+    const { totalActiveTime, totalIdleTime, notes, sessionId } = req.body;
 
     // Use actual tracked time if provided by desktop app, otherwise fall back to wall-clock time
     // This prevents uptime inflation during system sleep
     const hasTrackedTime = typeof totalActiveTime === 'number' && typeof totalIdleTime === 'number';
     const trackedDuration = hasTrackedTime ? (totalActiveTime + totalIdleTime) : null;
 
+    // Build the row-targeting WHERE clause: prefer sessionId when provided (needed for the
+    // regular→overtime transition where multiple sessions can briefly exist for one user).
+    // Falls back to "any active session for this user" for backwards compatibility.
+    const targetClause = sessionId
+      ? { sql: `WHERE id = $1 AND user_id = $2 AND is_active = true`, params: [sessionId, userId] }
+      : { sql: `WHERE user_id = $1 AND is_active = true`, params: [userId] };
+
     let result;
     if (trackedDuration !== null) {
-      // Try to use the new columns first, fall back to basic update if columns don't exist
+      const baseParams = [...targetClause.params, trackedDuration, totalActiveTime, totalIdleTime, notes];
+      const p = (i) => `$${i}`;
       try {
         result = await pool.query(
           `UPDATE sessions SET
              is_active = false,
              end_time = CURRENT_TIMESTAMP,
-             duration_seconds = $2,
-             active_seconds = $3,
-             idle_seconds = $4,
-             notes = COALESCE($5, notes)
-           WHERE user_id = $1 AND is_active = true RETURNING *`,
-          [userId, trackedDuration, totalActiveTime, totalIdleTime, notes]
+             duration_seconds = ${p(targetClause.params.length + 1)},
+             active_seconds = ${p(targetClause.params.length + 2)},
+             idle_seconds = ${p(targetClause.params.length + 3)},
+             notes = COALESCE(${p(targetClause.params.length + 4)}, notes)
+           ${targetClause.sql} RETURNING *`,
+          baseParams
         );
       } catch (columnError) {
-        // If columns don't exist, fall back to basic update with just duration_seconds
         console.log('New session columns not available, using fallback:', columnError.message);
         result = await pool.query(
           `UPDATE sessions SET
              is_active = false,
              end_time = CURRENT_TIMESTAMP,
-             duration_seconds = $2
-           WHERE user_id = $1 AND is_active = true RETURNING *`,
-          [userId, trackedDuration]
+             duration_seconds = ${p(targetClause.params.length + 1)}
+           ${targetClause.sql} RETURNING *`,
+          [...targetClause.params, trackedDuration]
         );
       }
     } else {
-      // Fallback to wall-clock time (legacy behavior)
       result = await pool.query(
         `UPDATE sessions SET is_active = false, end_time = CURRENT_TIMESTAMP,
          duration_seconds = EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - start_time))
-         WHERE user_id = $1 AND is_active = true RETURNING *`,
-        [userId]
+         ${targetClause.sql} RETURNING *`,
+        targetClause.params
       );
     }
 

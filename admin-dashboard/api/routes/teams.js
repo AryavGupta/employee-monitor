@@ -292,28 +292,13 @@ router.put('/:id/settings', authenticateToken, authorizeAdmin, async (req, res) 
       track_keyboard_mouse,
       working_hours_start,
       working_hours_end,
-      working_days
+      working_days,
+      track_outside_hours
     } = req.body;
 
-    const result = await pool.query(`
-      INSERT INTO team_monitoring_settings (
-        team_id, screenshot_interval, activity_interval, idle_threshold,
-        track_urls, track_applications, track_keyboard_mouse,
-        working_hours_start, working_hours_end, working_days
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      ON CONFLICT (team_id) DO UPDATE SET
-        screenshot_interval = COALESCE($2, team_monitoring_settings.screenshot_interval),
-        activity_interval = COALESCE($3, team_monitoring_settings.activity_interval),
-        idle_threshold = COALESCE($4, team_monitoring_settings.idle_threshold),
-        track_urls = COALESCE($5, team_monitoring_settings.track_urls),
-        track_applications = COALESCE($6, team_monitoring_settings.track_applications),
-        track_keyboard_mouse = COALESCE($7, team_monitoring_settings.track_keyboard_mouse),
-        working_hours_start = $8,
-        working_hours_end = $9,
-        working_days = COALESCE($10, team_monitoring_settings.working_days),
-        updated_at = CURRENT_TIMESTAMP
-      RETURNING *
-    `, [
+    // Try with the new track_outside_hours column. Falls back gracefully if migration
+    // 003_overtime_support.sql hasn't been run yet (42703 = undefined_column).
+    const fullParams = [
       id,
       screenshot_interval || 60,
       activity_interval || 10,
@@ -323,8 +308,58 @@ router.put('/:id/settings', authenticateToken, authorizeAdmin, async (req, res) 
       track_keyboard_mouse !== undefined ? track_keyboard_mouse : true,
       working_hours_start || null,
       working_hours_end || null,
-      working_days || [1, 2, 3, 4, 5]
-    ]);
+      working_days || [1, 2, 3, 4, 5],
+      track_outside_hours === true
+    ];
+
+    let result;
+    try {
+      result = await pool.query(`
+        INSERT INTO team_monitoring_settings (
+          team_id, screenshot_interval, activity_interval, idle_threshold,
+          track_urls, track_applications, track_keyboard_mouse,
+          working_hours_start, working_hours_end, working_days, track_outside_hours
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (team_id) DO UPDATE SET
+          screenshot_interval = COALESCE($2, team_monitoring_settings.screenshot_interval),
+          activity_interval = COALESCE($3, team_monitoring_settings.activity_interval),
+          idle_threshold = COALESCE($4, team_monitoring_settings.idle_threshold),
+          track_urls = COALESCE($5, team_monitoring_settings.track_urls),
+          track_applications = COALESCE($6, team_monitoring_settings.track_applications),
+          track_keyboard_mouse = COALESCE($7, team_monitoring_settings.track_keyboard_mouse),
+          working_hours_start = $8,
+          working_hours_end = $9,
+          working_days = COALESCE($10, team_monitoring_settings.working_days),
+          track_outside_hours = COALESCE($11, team_monitoring_settings.track_outside_hours),
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING *
+      `, fullParams);
+    } catch (err) {
+      if (err.code === '42703') {
+        console.warn('team_monitoring_settings.track_outside_hours missing — falling back. Run migration 003_overtime_support.sql.');
+        result = await pool.query(`
+          INSERT INTO team_monitoring_settings (
+            team_id, screenshot_interval, activity_interval, idle_threshold,
+            track_urls, track_applications, track_keyboard_mouse,
+            working_hours_start, working_hours_end, working_days
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT (team_id) DO UPDATE SET
+            screenshot_interval = COALESCE($2, team_monitoring_settings.screenshot_interval),
+            activity_interval = COALESCE($3, team_monitoring_settings.activity_interval),
+            idle_threshold = COALESCE($4, team_monitoring_settings.idle_threshold),
+            track_urls = COALESCE($5, team_monitoring_settings.track_urls),
+            track_applications = COALESCE($6, team_monitoring_settings.track_applications),
+            track_keyboard_mouse = COALESCE($7, team_monitoring_settings.track_keyboard_mouse),
+            working_hours_start = $8,
+            working_hours_end = $9,
+            working_days = COALESCE($10, team_monitoring_settings.working_days),
+            updated_at = CURRENT_TIMESTAMP
+          RETURNING *
+        `, fullParams.slice(0, 10));
+      } else {
+        throw err;
+      }
+    }
 
     res.json({ success: true, message: 'Settings updated successfully', data: result.rows[0] });
   } catch (error) {

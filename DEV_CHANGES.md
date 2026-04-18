@@ -4,6 +4,79 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-18 — Overtime / Extra Hours mode + activity-based "Online" status
+
+End-to-end implementation of the spec captured in `~/.claude/plans/make-the-changes-as-fluttering-sketch.md`. Solves two problems:
+
+1. **Neeraj-2pm bug:** Users appeared "online" any time their laptop was on, regardless of working hours / actual activity. Cold-start outside hours was sending heartbeats forever (`main.js` old line 1700–1702).
+2. **No overtime visibility:** Customers couldn't see post-shift work as a separate bucket — it either showed up as part of the regular shift or didn't show at all.
+
+### Schema (migration `003_overtime_support.sql` — required)
+
+- `sessions.overtime BOOLEAN DEFAULT FALSE` + composite index `(user_id, overtime, start_time DESC)`
+- `team_monitoring_settings.track_outside_hours BOOLEAN DEFAULT FALSE` (per-team toggle)
+- `user_presence.status` CHECK constraint dropped/recreated to include `'logged_out'`
+
+`activity_logs.is_overtime` and `shift_date` already exist (no change).
+
+### Backend (`admin-dashboard/api/`)
+
+- **`sessions.js`**
+  - `POST /api/sessions/start` accepts `overtime` boolean. Falls back gracefully (42703) if migration hasn't run.
+  - `POST /api/sessions/end` accepts optional `sessionId` for targeted close (needed during regular→overtime transition where two active sessions briefly coexist).
+- **`presence.js`**
+  - `POST /heartbeat` validates status against `{online, idle, offline, logged_out}` whitelist; piggybacks `settings_version` (epoch ms of `team_monitoring_settings.updated_at`) and `track_outside_hours` on the response so the desktop can detect config changes without polling.
+  - **`effective_status` rewritten** in `/online`, `/summary`, `/user/:id` (extracted to a single `EFFECTIVE_STATUS_SQL` constant): `logged_out` wins → stale heartbeat = `offline` → fresh heartbeat AND non-idle activity in last 90s = `online` → otherwise `idle`. Heartbeat alone no longer counts as online.
+  - `/summary` counts use the same expression — counts and per-user statuses can never disagree.
+- **`teams.js`** PUT `/teams/:id/settings` accepts and persists `track_outside_hours` (with 42703 fallback). GET uses `SELECT *` so the field is included automatically once the column exists.
+- **`reports.js`**
+  - Existing `/shift-attendance` now filters `s.overtime = false` and `a.is_overtime = false` so the regular row is never polluted by overtime data.
+  - **New endpoint `GET /shift-attendance/overtime`** returns the same shape but for the post-shift window `[shift_end, min(shift_end + 24h, now())]`, filtered to `overtime=true` sessions and `is_overtime=true` activity.
+
+### Desktop (`desktop-app/main.js`)
+
+- New global `CONFIG.TRACK_OUTSIDE_HOURS`, `currentSessionIsOvertime`, `lastSettingsVersion`.
+- **`fetchTeamSettings()`** now stores `track_outside_hours` and clears working hours when team unsets them.
+- **`sendHeartbeat()`** captures `settings_version` from response; refetches `fetchTeamSettings()` only on version change → settings propagate within 30s without polling.
+- **`startWorkSession({ overtime })` / `endWorkSession()`** thread the overtime flag and target a specific `sessionId` on close (prevents race during transition).
+- **Four new transition handlers** in `checkWorkingHoursAndToggle()`:
+  - `pauseTrackingForLogout()` — shift end with overtime disabled. Pushes `status=logged_out` heartbeat before stopping so dashboard flips immediately (no 90s wait).
+  - `transitionToOvertime()` — shift end with overtime enabled. End regular → push logged_out → start overtime session. Intervals keep running.
+  - `transitionToRegular()` — overtime running when next-day shift starts. End overtime → start regular.
+  - Cold-start outside hours: if `track_outside_hours=true` → start overtime tracking; if false → idle (no heartbeat). **This fixes the Neeraj-2pm bug.**
+- `powerMonitor.on('shutdown')` now sends `status=logged_out` (was `offline`) so dashboard can distinguish clean shutdown from network blip.
+- `powerMonitor.on('suspend')` heartbeat status changed from `'away'` (which silently failed the pre-existing CHECK constraint) to `'offline'`.
+
+### Frontend
+
+- **New `src/utils/statusHelpers.js`** with `STATUS_COLORS`, `STATUS_LABELS`, `STATUS_CLASS_NAMES`, plus `getStatusLabel/Color/ClassName/Icon` helpers. Adds `logged_out` everywhere with slate color and "Logged Out" label.
+- `Dashboard.js`, `Teams.js`, `LiveMonitor.js`, `UserActivity.js` switched to shared helpers (replaced four duplicated `switch` statements).
+- `Teams.js` settings modal: new "Extra Hours Tracking" section with `track_outside_hours` checkbox + helper text.
+- `AttendanceLogs.js`:
+  - `fetchShiftAttendance()` now does `Promise.all([regular, overtime])` (overtime fetch fails-soft for pre-migration servers).
+  - New "Extra Hours" stats card renders below the regular shift card when `overtimeData.summary.total_seconds > 0`.
+  - `exportShiftCSV()` rewritten as **client-side builder** (per `feedback_csv_export.md`) — emits the user's requested split-row format ("Reports" header → Regular row, blank line, "Extra Hours" header → Overtime row).
+- CSS: `.badge-logged-out` added to `Dashboard.css` + `UserActivity.css`. `.al-overtime-block` added to `AttendanceLogs.css` (warm tint, dashed top border). `.checkbox-label`, `.settings-help` added to `Teams.css`.
+
+### Rollout order
+
+1. Apply `migrations/003_overtime_support.sql` to Supabase.
+2. Deploy backend (Vercel auto-deploys on push). Old desktops keep working — overtime defaults false; logged_out won't be sent yet.
+3. Deploy frontend (same push). New status helper renders gracefully for old data.
+4. **Bump `desktop-app/package.json` patch version** (per `feedback_version_bump.md`), `npm run build:desktop`, distribute installer.
+5. Admins toggle `track_outside_hours=true` per team in the Teams settings modal.
+
+### Backwards compatibility
+
+- Old desktop ⇄ new server: continues sending `online`/`idle` only. Sessions default to `overtime=false`. Effective status now requires activity → previously-online-without-activity users will start showing as Idle (this is the intended behavior change).
+- New desktop ⇄ old server (pre-migration): `logged_out` heartbeat triggers a CHECK constraint error 500. Heartbeat then silently fails — dashboard reverts to 90s staleness for logout detection. Acceptable graceful degradation. Mitigation: run migration first.
+
+### Risks / follow-ups (logged in TODO.md)
+
+- New `EXISTS` subquery on every `/presence/online` poll. Hits the existing `(user_id, timestamp DESC)` index. If `pg_stat_statements` flags it, denormalize `last_activity_at` onto `user_presence`.
+
+---
+
 ## 2026-04-18 — Validation fixes: WH-on-wake, multi-monitor, screenshot offline queue
 
 Three fixes from the end-to-end validation report. Server changes are backward-compatible (no required migration); desktop changes ship in next installer rebuild.

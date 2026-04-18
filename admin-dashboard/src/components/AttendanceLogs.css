@@ -167,6 +167,17 @@
 .al-badge.day { background: #fef3c7; color: #92400e; }
 .al-shift-time { font-size: 13px; color: #94a3b8; }
 
+/* Extra Hours / Overtime block — sits below the regular shift summary, visually
+   distinguished with a soft warm tint and dashed top border so admins can scan
+   the page and immediately see post-shift work as a separate bucket. */
+.al-overtime-block {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 2px dashed #fde68a;
+}
+.al-overtime-block .al-shift-header h3 { color: #b45309; }
+.al-overtime-block .al-stat { background: #fffbeb; border-color: #fef3c7; }
+
 /* Stats Grid */
 .al-stats-grid {
   display: grid;

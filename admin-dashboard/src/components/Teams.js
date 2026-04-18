@@ -4,6 +4,7 @@ import { format } from 'date-fns';
 import Sidebar from './Sidebar';
 import { useUsers } from '../hooks/useUsers';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { getStatusColor as sharedStatusColor } from '../utils/statusHelpers';
 import './Teams.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -235,13 +236,7 @@ function Teams({ user, onLogout }) {
     setShowAddMemberModal(true);
   };
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'online': return '#22c55e';
-      case 'idle': return '#f59e0b';
-      default: return '#6b7280';
-    }
-  };
+  const getStatusColor = sharedStatusColor;
 
   if (user.role !== 'admin' && user.role !== 'team_manager') {
     return (
@@ -589,6 +584,23 @@ function Teams({ user, onLogout }) {
                       />
                     </div>
                   </div>
+                </div>
+
+                <div className="settings-section">
+                  <h4>Extra Hours Tracking</h4>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={!!settingsData.track_outside_hours}
+                      onChange={e => setSettingsData({ ...settingsData, track_outside_hours: e.target.checked })}
+                    />
+                    <span>Allow tracking outside working hours (Extra Hours mode)</span>
+                  </label>
+                  <p className="settings-help">
+                    When enabled, the desktop app continues capturing screenshots and activity
+                    after the working-hours window ends, tagging that work as Extra Hours.
+                    When disabled, the user is marked Logged Out at shift end.
+                  </p>
                 </div>
 
                 <div className="modal-actions">

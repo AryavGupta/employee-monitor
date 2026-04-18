@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { format, formatDistanceToNow } from 'date-fns';
 import Sidebar from './Sidebar';
+import { getStatusLabel, getStatusClassName, getStatusColor } from '../utils/statusHelpers';
 import './Dashboard.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -46,15 +47,9 @@ function Dashboard({ user, onLogout }) {
     return () => { clearInterval(interval); document.removeEventListener('visibilitychange', onVisible); };
   }, [fetchDashboardData]);
 
-  const getStatusBadge = (status) => {
-    const map = {
-      online: { label: 'Active', className: 'badge-active' },
-      idle: { label: 'Idle', className: 'badge-idle' },
-      offline: { label: 'Offline', className: 'badge-offline' }
-    };
-    const s = map[status] || map.offline;
-    return <span className={`status-badge ${s.className}`}>{s.label}</span>;
-  };
+  const getStatusBadge = (status) => (
+    <span className={`status-badge ${getStatusClassName(status)}`}>{getStatusLabel(status)}</span>
+  );
 
   const filteredEmployees = useMemo(() =>
     employees.filter(emp =>
@@ -192,7 +187,7 @@ function Dashboard({ user, onLogout }) {
                     <tr key={emp.user_id}>
                       <td>
                         <div className="emp-info">
-                          <div className="emp-avatar" style={{ background: emp.effective_status === 'online' ? '#10b981' : emp.effective_status === 'idle' ? '#f59e0b' : '#94a3b8' }}>
+                          <div className="emp-avatar" style={{ background: getStatusColor(emp.effective_status) }}>
                             {emp.full_name?.charAt(0).toUpperCase()}
                           </div>
                           <div>

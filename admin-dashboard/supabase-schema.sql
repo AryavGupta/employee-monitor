@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     active_seconds INTEGER,          -- Actual active (non-idle) time tracked by desktop app
     idle_seconds INTEGER,            -- Actual idle time tracked by desktop app
     is_active BOOLEAN DEFAULT true,
+    overtime BOOLEAN NOT NULL DEFAULT false,  -- True when session was created outside working hours (Extra Hours mode)
     system_info JSONB,
     notes TEXT,                      -- Session notes (e.g., "Active: 30min, Idle: 5min")
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -182,7 +183,7 @@ CREATE INDEX IF NOT EXISTS idx_app_categories_category ON app_categories(categor
 CREATE TABLE IF NOT EXISTS user_presence (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status VARCHAR(50) NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'idle', 'offline')),
+    status VARCHAR(50) NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'idle', 'offline', 'logged_out')),
     current_application VARCHAR(255),
     current_window_title VARCHAR(500),
     current_url VARCHAR(1000),
@@ -238,6 +239,7 @@ CREATE TABLE IF NOT EXISTS team_monitoring_settings (
     working_hours_start TIME,
     working_hours_end TIME,
     working_days INTEGER[] DEFAULT '{1,2,3,4,5}',
+    track_outside_hours BOOLEAN NOT NULL DEFAULT false,  -- When true, desktop continues tracking after shift end as Extra Hours
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(team_id)

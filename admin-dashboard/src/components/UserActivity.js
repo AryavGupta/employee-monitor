@@ -110,7 +110,8 @@ function UserActivity({ user, onLogout }) {
       case 'active': return { label: 'Active', className: 'badge-active' };
       case 'idle': return { label: 'Idle', className: 'badge-idle', idle: formatIdleTime(session.idle_seconds) };
       case 'disconnected': return { label: 'Disconnected', className: 'badge-disconnected' };
-      default: return { label: 'Logged Out', className: 'badge-offline' };
+      case 'logged_out': return { label: 'Logged Out', className: 'badge-logged-out' };
+      default: return { label: 'Logged Out', className: 'badge-logged-out' };
     }
   };
 

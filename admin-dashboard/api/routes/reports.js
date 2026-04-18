@@ -551,7 +551,9 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
     // 3. Auto-close stale sessions before querying (uses optimized CTE)
     try { await closeAllStaleSessions(pool); } catch (e) { /* non-critical */ }
 
-    // Query sessions within shift window
+    // Query sessions within shift window — exclude overtime sessions so the regular
+    // row never double-counts work captured by the /shift-attendance/overtime endpoint.
+    // The "overtime IS NULL" branch keeps pre-migration rows visible (default = regular).
     const sessionsResult = await pool.query(
       `SELECT s.id, s.start_time, s.end_time, s.is_active,
               s.duration_seconds, s.active_seconds, s.idle_seconds,
@@ -566,11 +568,12 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
        FROM sessions s
        LEFT JOIN user_presence p ON s.user_id = p.user_id
        WHERE s.user_id = $1 AND s.start_time >= $2 AND s.start_time < $3
+         AND (s.overtime IS NULL OR s.overtime = false)
        ORDER BY s.start_time ASC`,
       [targetUserId, shift_start_utc, shift_end_utc]
     );
 
-    // 4. Query activity summary using same UTC time range as sessions
+    // 4. Query activity summary using same UTC time range as sessions, regular only.
     const activityResult = await pool.query(
       `SELECT
         COALESCE(SUM(CASE WHEN is_idle = false THEN duration_seconds ELSE 0 END), 0) as active_seconds,
@@ -580,7 +583,8 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
         MAX(timestamp) as last_activity,
         COUNT(*) as activity_count
        FROM activity_logs
-       WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3`,
+       WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3
+         AND (is_overtime IS NULL OR is_overtime = false)`,
       [targetUserId, shift_start_utc, shift_end_utc]
     );
 
@@ -710,6 +714,240 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Get shift attendance error:', error);
     res.status(500).json({ success: false, message: 'Failed to retrieve shift attendance' });
+  }
+});
+
+// Overtime / Extra Hours attendance — returns the same shape as /shift-attendance
+// but for the post-shift window where the desktop tracked work as overtime=true.
+// The window starts at the regular shift end and runs up to (shift_end + 24h)
+// or "now", whichever is earlier. Returns an empty summary if the team didn't
+// have working hours configured (no shift end → no overtime concept).
+router.get('/shift-attendance/overtime', authenticateToken, async (req, res) => {
+  try {
+    const pool = req.app.locals.pool;
+    const { userId, shiftDate, timezone } = req.query;
+
+    if (!shiftDate) {
+      return res.status(400).json({ success: false, message: 'shiftDate is required' });
+    }
+
+    const targetUserId = req.user.role === 'admin' && userId ? userId : req.user.userId;
+    const tz = timezone || 'UTC';
+
+    // 1. Reuse the same shift-window computation as /shift-attendance so the
+    //    boundary between regular and overtime is exact (no overlap, no gap).
+    const teamResult = await pool.query(
+      `SELECT tms.working_hours_start, tms.working_hours_end
+       FROM users u
+       LEFT JOIN team_monitoring_settings tms ON tms.team_id = u.team_id
+       WHERE u.id = $1`,
+      [targetUserId]
+    );
+    const teamSettings = teamResult.rows[0] || {};
+    const whStart = teamSettings.working_hours_start;
+    const whEnd = teamSettings.working_hours_end;
+
+    if (!whStart || !whEnd) {
+      // No working hours → no shift end → no overtime concept. Return empty payload
+      // so the frontend can render zero state without special-casing.
+      return res.json({
+        success: true,
+        data: {
+          shift: { date: shiftDate, label: 'Extra Hours', is_night_shift: false },
+          sessions: [],
+          summary: {
+            first_login: null, last_logout: null, is_active: false,
+            total_seconds: 0, active_seconds: 0, idle_seconds: 0,
+            session_count: 0, activity_count: 0
+          }
+        }
+      });
+    }
+
+    const startParts = whStart.split(':').map(Number);
+    const endParts = whEnd.split(':').map(Number);
+    const startMinutes = startParts[0] * 60 + startParts[1];
+    const endMinutes = endParts[0] * 60 + endParts[1];
+    const isNightShift = startMinutes > endMinutes;
+
+    let shiftEndLocal;
+    if (isNightShift) {
+      const nextDay = new Date(new Date(shiftDate).getTime() + 86400000).toISOString().split('T')[0];
+      shiftEndLocal = `${nextDay}T${whEnd.substring(0, 5)}:00`;
+    } else {
+      shiftEndLocal = `${shiftDate}T${whEnd.substring(0, 5)}:00`;
+    }
+    // Overtime window ends 24h after shift end (covers same-day shutdown).
+    const overtimeEndLocalDate = new Date(new Date(shiftEndLocal).getTime() + 86400000);
+    const pad = n => String(n).padStart(2, '0');
+    const overtimeEndLocal =
+      `${overtimeEndLocalDate.getFullYear()}-${pad(overtimeEndLocalDate.getMonth() + 1)}-${pad(overtimeEndLocalDate.getDate())}` +
+      `T${pad(overtimeEndLocalDate.getHours())}:${pad(overtimeEndLocalDate.getMinutes())}:00`;
+
+    const boundsResult = await pool.query(
+      `SELECT
+         ($1::timestamp AT TIME ZONE $3) AT TIME ZONE 'UTC' as overtime_start_utc,
+         LEAST(($2::timestamp AT TIME ZONE $3) AT TIME ZONE 'UTC', NOW()) as overtime_end_utc`,
+      [shiftEndLocal, overtimeEndLocal, tz]
+    );
+    const { overtime_start_utc, overtime_end_utc } = boundsResult.rows[0];
+
+    // Auto-close stale sessions before reading.
+    try { await closeAllStaleSessions(pool); } catch (e) { /* non-critical */ }
+
+    // 2. Sessions tagged overtime within the window.
+    let sessionsResult;
+    try {
+      sessionsResult = await pool.query(
+        `SELECT s.id, s.start_time, s.end_time, s.is_active,
+                s.duration_seconds, s.active_seconds, s.idle_seconds,
+                p.last_heartbeat, p.status as presence_status, p.idle_seconds as presence_idle_seconds,
+                CASE
+                  WHEN s.end_time IS NOT NULL THEN 'logged_out'
+                  WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' AND p.status = 'idle' THEN 'idle'
+                  WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' THEN 'active'
+                  WHEN s.is_active = true THEN 'disconnected'
+                  ELSE 'logged_out'
+                END as effective_status
+         FROM sessions s
+         LEFT JOIN user_presence p ON s.user_id = p.user_id
+         WHERE s.user_id = $1 AND s.start_time >= $2 AND s.start_time < $3
+           AND s.overtime = true
+         ORDER BY s.start_time ASC`,
+        [targetUserId, overtime_start_utc, overtime_end_utc]
+      );
+    } catch (err) {
+      if (err.code === '42703') {
+        // Pre-migration: overtime column missing → no overtime data possible.
+        sessionsResult = { rows: [] };
+      } else {
+        throw err;
+      }
+    }
+
+    // 3. Activity within window where is_overtime=true (column already exists pre-migration).
+    const activityResult = await pool.query(
+      `SELECT
+        COALESCE(SUM(CASE WHEN is_idle = false THEN duration_seconds ELSE 0 END), 0) as active_seconds,
+        COALESCE(SUM(CASE WHEN is_idle = true THEN duration_seconds ELSE 0 END), 0) as idle_seconds,
+        COALESCE(SUM(duration_seconds), 0) as total_seconds,
+        MIN(timestamp) as first_activity,
+        MAX(timestamp) as last_activity,
+        COUNT(*) as activity_count
+       FROM activity_logs
+       WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3
+         AND is_overtime = true`,
+      [targetUserId, overtime_start_utc, overtime_end_utc]
+    );
+
+    // 4. Evidence-of-life within the overtime window only.
+    const evidenceResult = await pool.query(
+      `SELECT
+         LEAST(
+           (SELECT MIN(timestamp) FROM activity_logs
+              WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3 AND is_overtime = true),
+           (SELECT MIN(captured_at) FROM screenshots
+              WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3)
+         ) as first_evidence,
+         GREATEST(
+           (SELECT MAX(timestamp) FROM activity_logs
+              WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3 AND is_overtime = true),
+           (SELECT MAX(captured_at) FROM screenshots
+              WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3)
+         ) as last_evidence`,
+      [targetUserId, overtime_start_utc, overtime_end_utc]
+    );
+
+    const activity = activityResult.rows[0];
+    const sessions = sessionsResult.rows;
+    const evidenceFirst = evidenceResult.rows[0]?.first_evidence;
+    const evidenceLast = evidenceResult.rows[0]?.last_evidence;
+
+    const sessionFirstStart = sessions.length > 0 ? sessions[0].start_time : null;
+    const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
+    const hasActiveSession = sessions.some(s => s.effective_status === 'active' || s.effective_status === 'idle');
+    const hasOpenSession = sessions.some(s => !s.end_time);
+
+    const firstLogin = (sessionFirstStart && evidenceFirst)
+      ? (new Date(sessionFirstStart) < new Date(evidenceFirst) ? sessionFirstStart : evidenceFirst)
+      : (sessionFirstStart || evidenceFirst || null);
+
+    let lastLogout = (!hasOpenSession && lastSession?.end_time) ? lastSession.end_time : null;
+
+    let effectiveEndTs = null;
+    if (firstLogin) {
+      const now = new Date();
+      const overtimeEnd = new Date(overtime_end_utc);
+      const first = new Date(firstLogin);
+      const LIVE_GRACE_MS = 90 * 1000;
+      if (lastLogout && !hasOpenSession) {
+        effectiveEndTs = new Date(lastLogout);
+      } else if (evidenceLast) {
+        let candidate;
+        if ((now - new Date(evidenceLast)) <= LIVE_GRACE_MS) {
+          candidate = now;
+        } else {
+          candidate = new Date(evidenceLast);
+          if (!hasOpenSession && !hasActiveSession) lastLogout = candidate.toISOString();
+        }
+        if (candidate > overtimeEnd) candidate = overtimeEnd;
+        if (candidate > now) candidate = now;
+        if (candidate < first) candidate = first;
+        effectiveEndTs = candidate;
+      } else {
+        effectiveEndTs = first;
+      }
+    }
+
+    const totalWallClock = firstLogin
+      ? Math.max(Math.floor((effectiveEndTs - new Date(firstLogin)) / 1000), 0)
+      : 0;
+
+    res.json({
+      success: true,
+      data: {
+        shift: {
+          date: shiftDate,
+          start_local: shiftEndLocal,
+          end_local: overtimeEndLocal,
+          start_utc: overtime_start_utc,
+          end_utc: overtime_end_utc,
+          working_hours_start: whStart ? whStart.substring(0, 5) : null,
+          working_hours_end: whEnd ? whEnd.substring(0, 5) : null,
+          is_night_shift: isNightShift,
+          label: 'Extra Hours'
+        },
+        sessions: sessions.map(s => {
+          const durSecs = s.end_time
+            ? (parseInt(s.duration_seconds) || Math.floor((new Date(s.end_time) - new Date(s.start_time)) / 1000))
+            : Math.max(Math.floor(((effectiveEndTs || new Date()) - new Date(s.start_time)) / 1000), 0);
+          return {
+            id: s.id,
+            start_time: s.start_time,
+            end_time: s.end_time,
+            duration_seconds: durSecs,
+            active_seconds: parseInt(s.active_seconds) || 0,
+            idle_seconds: parseInt(s.idle_seconds) || 0,
+            effective_status: s.effective_status,
+            presence_idle_seconds: parseInt(s.presence_idle_seconds) || 0,
+            overtime: true
+          };
+        }),
+        summary: {
+          first_login: firstLogin,
+          last_logout: lastLogout,
+          is_active: hasActiveSession,
+          total_seconds: totalWallClock,
+          active_seconds: parseInt(activity.active_seconds) || 0,
+          idle_seconds: Math.max(totalWallClock - (parseInt(activity.active_seconds) || 0), 0),
+          session_count: sessions.length,
+          activity_count: parseInt(activity.activity_count) || 0
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get overtime attendance error:', error);
+    res.status(500).json({ success: false, message: 'Failed to retrieve overtime attendance' });
   }
 });
 

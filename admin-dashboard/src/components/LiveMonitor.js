@@ -80,6 +80,7 @@ function LiveMonitor({ user, onLogout }) {
     switch (status) {
       case 'online': return '#22c55e';
       case 'idle': return '#f59e0b';
+      case 'logged_out': return '#94a3b8';
       case 'offline': return '#6b7280';
       default: return '#6b7280';
     }
@@ -89,6 +90,7 @@ function LiveMonitor({ user, onLogout }) {
     switch (status) {
       case 'online': return '🟢';
       case 'idle': return '🟡';
+      case 'logged_out': return '⚪';
       case 'offline': return '⚫';
       default: return '⚫';
     }
