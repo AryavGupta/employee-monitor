@@ -4,7 +4,17 @@
   display: grid;
   grid-template-columns: 380px 1fr;
   gap: 24px;
-  min-height: calc(100vh - 180px);
+  /* Bound the layout to viewport so both panels can scroll INDEPENDENTLY rather
+     than the whole page scrolling. min-height was letting the panel push the
+     outer scroll, which hid the right-side details when scrolling the left list. */
+  height: calc(100vh - 180px);
+  min-height: 0;
+}
+
+.teams-list-panel,
+.team-details-panel {
+  /* Required for flex/grid children to respect overflow on inner containers */
+  min-height: 0;
 }
 
 /* Teams List Panel */
@@ -25,6 +35,29 @@
   color: #0f172a;
   border-bottom: 1px solid #e2e8f0;
   background: #f8fafc;
+}
+
+/* Sticky search field above the team list — sits between the title and the
+   scrolling list so it stays visible while the user scrolls through teams. */
+.teams-search {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: white;
+}
+
+.teams-search input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.teams-search input:focus {
+  border-color: #3b82f6;
 }
 
 .teams-list {

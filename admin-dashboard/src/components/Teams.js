@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import Sidebar from './Sidebar';
@@ -23,7 +23,15 @@ function Teams({ user, onLogout }) {
   useBodyScrollLock(showCreateModal || showSettingsModal || showAddMemberModal || !!editingTeam);
   const [formData, setFormData] = useState({ name: '', description: '', manager_id: '' });
   const [settingsData, setSettingsData] = useState({});
+  const [teamSearch, setTeamSearch] = useState('');
   const initialLoadDone = useRef(false);
+
+  // Filter teams by name (case-insensitive). Computed once per teams/teamSearch change.
+  const filteredTeams = useMemo(() => {
+    const q = teamSearch.trim().toLowerCase();
+    if (!q) return teams;
+    return teams.filter(t => (t.name || '').toLowerCase().includes(q));
+  }, [teams, teamSearch]);
 
   const fetchTeams = useCallback(async () => {
     try {
@@ -275,12 +283,22 @@ function Teams({ user, onLogout }) {
           <div className="teams-layout">
             {/* Teams List */}
             <div className="teams-list-panel">
-              <h3>All Teams ({teams.length})</h3>
+              <h3>All Teams ({filteredTeams.length}{teamSearch ? ` of ${teams.length}` : ''})</h3>
+              <div className="teams-search">
+                <input
+                  type="text"
+                  placeholder="Search teams..."
+                  value={teamSearch}
+                  onChange={e => setTeamSearch(e.target.value)}
+                />
+              </div>
               <div className="teams-list">
                 {teams.length === 0 ? (
                   <div className="empty-state">No teams created yet</div>
+                ) : filteredTeams.length === 0 ? (
+                  <div className="empty-state">No teams match "{teamSearch}"</div>
                 ) : (
-                  teams.map(team => (
+                  filteredTeams.map(team => (
                     <div
                       key={team.id}
                       className={`team-card ${selectedTeam?.id === team.id ? 'selected' : ''}`}
