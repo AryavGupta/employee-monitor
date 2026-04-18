@@ -229,9 +229,25 @@
       height: 16px;
       fill: currentColor;
     }
+
+    .version-badge {
+      position: fixed;
+      top: 10px;
+      right: 14px;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.9);
+      background: rgba(0, 0, 0, 0.28);
+      padding: 3px 9px;
+      border-radius: 10px;
+      z-index: 9999;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: 0.3px;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
+  <div class="version-badge" id="versionBadge">v—</div>
   <div class="settings-container">
     <div class="settings-header">
       <div class="settings-icon">
@@ -286,7 +302,14 @@
 
   <script>
     // Use secure electronAPI exposed via preload script
-    const { send, on } = window.electronAPI;
+    const { send, on, getVersion } = window.electronAPI;
+
+    if (getVersion) {
+      getVersion().then(v => {
+        const el = document.getElementById('versionBadge');
+        if (el && v) el.textContent = `v${v}`;
+      }).catch(() => {});
+    }
 
     const form = document.getElementById('passwordForm');
     const submitBtn = document.getElementById('submitBtn');

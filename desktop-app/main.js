@@ -670,6 +670,22 @@ function setupPowerMonitorHandlers() {
 
     // Resume tracking if we were tracking before sleep
     if (isTracking && CONFIG.USER_TOKEN) {
+      // Working-hours boundary may have crossed during sleep. If we slept inside
+      // hours and woke outside, do NOT restart tracking intervals — only
+      // heartbeat, so presence shows online but no false activity is logged.
+      // The workingHoursCheckInterval (still running, not cleared on suspend)
+      // will resume tracking when hours next open.
+      if (CONFIG.WORKING_HOURS_START && CONFIG.WORKING_HOURS_END && !shouldTrackNow()) {
+        console.log('Woke outside working hours — staying paused, heartbeat-only');
+        isTracking = false;
+        startHeartbeat();
+        sendHeartbeat();
+        if (mainWindow && mainWindow.webContents) {
+          mainWindow.webContents.send('system-wake', { sleepDuration });
+        }
+        return;
+      }
+
       console.log('Resuming tracking after wake...');
 
       // Always start a fresh session on wake. The suspend handler attempted to
@@ -681,10 +697,11 @@ function setupPowerMonitorHandlers() {
         currentSessionId = null;
         totalActiveSeconds = 0;
         totalIdleSeconds = 0;
-        await startWorkSession();
+        // Fire-and-forget per Phase 2 — don't await, intervals must start
+        // regardless of session-create success.
+        startWorkSession().catch(err => console.error('startWorkSession after wake threw:', err?.message));
       } catch (e) {
         console.error('Failed to start new session after wake:', e.message);
-        // Continue anyway — intervals must restart even without a session
       }
 
       // Restart intervals — MUST always run regardless of session check above
@@ -941,6 +958,9 @@ ipcMain.on('get-tracking-status', (event) => {
     teamSettings: teamSettings
   });
 });
+
+// App version (shown in top-right badge of every HTML screen)
+ipcMain.handle('get-app-version', () => app.getVersion());
 
 // Change password handler
 ipcMain.on('change-password', async (event, { currentPassword, newPassword }) => {
@@ -1339,9 +1359,13 @@ async function getWindowsEdgeChromeUrl(appName, hwnd) {
 
 async function captureScreenshot() {
   try {
+    // Capture ALL displays. Previously hardcoded sources[0] which silently
+    // ignored secondary monitors — managers couldn't audit dual-display setups.
+    const displays = screen.getAllDisplays();
+    const primary = screen.getPrimaryDisplay();
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
-      thumbnailSize: screen.getPrimaryDisplay().workAreaSize
+      thumbnailSize: primary.workAreaSize
     });
 
     if (sources.length === 0) {
@@ -1349,47 +1373,63 @@ async function captureScreenshot() {
       return;
     }
 
-    // Get the primary screen
-    const primarySource = sources[0];
-    const screenshot = primarySource.thumbnail.toDataURL();
+    const captureTs = new Date().toISOString();
 
-    // Send to server
-    await uploadScreenshot(screenshot);
-
-    console.log(`Screenshot captured and uploaded at ${new Date().toISOString()}`);
-
-    // Update UI
-    if (mainWindow) {
-      mainWindow.webContents.send('screenshot-captured', {
-        timestamp: new Date().toISOString()
+    // Upload each display in parallel. One failure must not block other displays
+    // — all errors are caught inside uploadScreenshot (which queues to disk on
+    // any non-401 failure). Promise.allSettled ensures we wait for all.
+    await Promise.allSettled(sources.map((source, idx) => {
+      const display = displays[idx] || null;
+      const displayId = display ? String(display.id) : `src-${idx}`;
+      const displayLabel = sources.length > 1
+        ? (display && display.id === primary.id ? `Primary (${idx + 1})` : `Display ${idx + 1}`)
+        : null;
+      return uploadScreenshot(source.thumbnail.toDataURL(), {
+        timestamp: captureTs,
+        displayId,
+        displayLabel,
+        displayCount: sources.length
       });
+    }));
+
+    console.log(`Captured ${sources.length} display(s) at ${captureTs}`);
+
+    if (mainWindow) {
+      mainWindow.webContents.send('screenshot-captured', { timestamp: captureTs });
     }
   } catch (error) {
     console.error('Error capturing screenshot:', error);
   }
 }
 
-async function uploadScreenshot(screenshotDataUrl) {
-  // Extract base64 data
+// Upload a single screenshot. On failure (network, 5xx, timeout), persist to
+// disk queue so it can be retried later. Auth failures (401) are NOT queued —
+// the token-refresh layer handles those, and queuing would just delay the
+// inevitable drop.
+async function uploadScreenshot(screenshotDataUrl, opts = {}) {
   const base64Data = screenshotDataUrl.replace(/^data:image\/\w+;base64,/, '');
-
-  // Get system info
+  const timestamp = opts.timestamp || new Date().toISOString();
   const systemInfo = {
     hostname: os.hostname(),
     platform: os.platform(),
     username: os.userInfo().username
   };
 
+  const payload = {
+    userId: CONFIG.USER_ID,
+    screenshot: base64Data,
+    timestamp,
+    systemInfo,
+    displayId: opts.displayId || null,
+    displayLabel: opts.displayLabel || null,
+    displayCount: opts.displayCount || 1
+  };
+
   try {
     const response = await apiCallWithRetry(async () => {
       return axios.post(
         `${CONFIG.API_URL}/api/screenshots/upload`,
-        {
-          userId: CONFIG.USER_ID,
-          screenshot: base64Data,
-          timestamp: new Date().toISOString(),
-          systemInfo: systemInfo
-        },
+        payload,
         {
           headers: {
             'Authorization': `Bearer ${CONFIG.USER_TOKEN}`,
@@ -1397,20 +1437,162 @@ async function uploadScreenshot(screenshotDataUrl) {
           },
           maxContentLength: Infinity,
           maxBodyLength: Infinity,
-          timeout: 30000 // 30 second timeout for large uploads
+          timeout: 30000
         }
       );
     });
-
     return response.data;
   } catch (error) {
     const status = error.response?.status;
     if (status === 401) {
       await handleTrackingAuthFailure('screenshot-upload');
-    } else {
-      console.error('Error uploading screenshot after retries:', error.message);
+      // Don't queue — auth path will recover or the buffer is moot
+      return null;
     }
-    throw error;
+    if (status >= 400 && status < 500) {
+      // Server rejected as malformed — queuing won't help, drop.
+      console.error('Screenshot upload rejected (4xx):', status);
+      return null;
+    }
+    // Network failure or 5xx — queue to disk for later retry
+    console.error('Screenshot upload failed, queueing to disk:', error.message);
+    queueScreenshot(payload);
+    return null;
+  }
+}
+
+// =====================================================
+// Screenshot offline queue — persists failed uploads to disk so a network
+// blip doesn't permanently lose the shot. Previously uploadScreenshot dropped
+// silently on any failure. Files live in userData/pending-screenshots/.
+// =====================================================
+const fsp = require('fs').promises;
+const SCREENSHOT_QUEUE_DIR_NAME = 'pending-screenshots';
+const SCREENSHOT_QUEUE_MAX_FILES = 200;        // ~200 MB cap at typical sizes
+const SCREENSHOT_QUEUE_MAX_AGE_MS = 24 * 3600 * 1000; // 24h
+const SCREENSHOT_RETRY_INTERVAL_MS = 60 * 1000;
+
+let screenshotQueueDir = null;
+let screenshotRetryInterval = null;
+let queueFlushInProgress = false;
+
+function getQueueDir() {
+  if (screenshotQueueDir) return screenshotQueueDir;
+  screenshotQueueDir = path.join(app.getPath('userData'), SCREENSHOT_QUEUE_DIR_NAME);
+  return screenshotQueueDir;
+}
+
+async function queueScreenshot(payload) {
+  try {
+    const dir = getQueueDir();
+    await fsp.mkdir(dir, { recursive: true });
+
+    // Age-based cleanup + overflow eviction, so a long outage can't fill disk.
+    const files = (await fsp.readdir(dir)).filter(f => f.endsWith('.json')).sort();
+    const now = Date.now();
+    const stats = await Promise.all(files.map(async f => {
+      try { const s = await fsp.stat(path.join(dir, f)); return { f, mtime: s.mtimeMs }; }
+      catch { return null; }
+    }));
+    const valid = stats.filter(Boolean);
+
+    // Drop expired
+    for (const { f, mtime } of valid) {
+      if (now - mtime > SCREENSHOT_QUEUE_MAX_AGE_MS) {
+        try { await fsp.unlink(path.join(dir, f)); } catch {}
+      }
+    }
+
+    // Drop oldest if over cap (keep newest, drop oldest)
+    const remaining = valid
+      .filter(x => now - x.mtime <= SCREENSHOT_QUEUE_MAX_AGE_MS)
+      .sort((a, b) => a.mtime - b.mtime);
+    while (remaining.length >= SCREENSHOT_QUEUE_MAX_FILES) {
+      const oldest = remaining.shift();
+      try { await fsp.unlink(path.join(dir, oldest.f)); } catch {}
+    }
+
+    const fname = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+    await fsp.writeFile(path.join(dir, fname), JSON.stringify(payload));
+  } catch (err) {
+    console.error('Failed to persist screenshot to queue:', err.message);
+  }
+}
+
+async function flushScreenshotQueue() {
+  if (queueFlushInProgress) return;
+  if (!CONFIG.USER_TOKEN) return; // no auth — retry later
+  queueFlushInProgress = true;
+  try {
+    const dir = getQueueDir();
+    let files;
+    try {
+      files = (await fsp.readdir(dir)).filter(f => f.endsWith('.json')).sort();
+    } catch (err) {
+      if (err.code === 'ENOENT') return;
+      throw err;
+    }
+    if (files.length === 0) return;
+
+    for (const f of files) {
+      const fullPath = path.join(dir, f);
+      let payload;
+      try {
+        payload = JSON.parse(await fsp.readFile(fullPath, 'utf8'));
+      } catch (parseErr) {
+        // Corrupted file — drop it so we don't loop forever
+        console.error('Dropping unreadable queued screenshot:', f, parseErr.message);
+        try { await fsp.unlink(fullPath); } catch {}
+        continue;
+      }
+
+      try {
+        await apiCallWithRetry(async () => {
+          return axios.post(
+            `${CONFIG.API_URL}/api/screenshots/upload`,
+            payload,
+            {
+              headers: {
+                'Authorization': `Bearer ${CONFIG.USER_TOKEN}`,
+                'Content-Type': 'application/json'
+              },
+              maxContentLength: Infinity,
+              maxBodyLength: Infinity,
+              timeout: 30000
+            }
+          );
+        });
+        try { await fsp.unlink(fullPath); } catch {}
+      } catch (uploadErr) {
+        const status = uploadErr.response?.status;
+        if (status >= 400 && status < 500 && status !== 401) {
+          // Server-rejected — drop permanently
+          try { await fsp.unlink(fullPath); } catch {}
+        }
+        // Otherwise keep on disk; next tick will retry.
+        // Stop iterating on first failure to avoid hammering a down server.
+        break;
+      }
+    }
+  } catch (err) {
+    console.error('Error flushing screenshot queue:', err.message);
+  } finally {
+    queueFlushInProgress = false;
+  }
+}
+
+function startScreenshotQueueRetry() {
+  if (screenshotRetryInterval) return;
+  // Immediate attempt, then periodic
+  flushScreenshotQueue().catch(() => {});
+  screenshotRetryInterval = setInterval(() => {
+    flushScreenshotQueue().catch(() => {});
+  }, SCREENSHOT_RETRY_INTERVAL_MS);
+}
+function stopScreenshotQueueRetry() {
+  if (screenshotRetryInterval) {
+    clearInterval(screenshotRetryInterval);
+    screenshotRetryInterval = null;
   }
 }
 
@@ -1505,6 +1687,7 @@ async function startScreenshotCapture() {
   }
 
   startSessionReconciliation();
+  startScreenshotQueueRetry();
 }
 
 // Heals mid-day session-create failures: every 5 min, if we're tracking but
@@ -1535,6 +1718,7 @@ async function stopScreenshotCapture() {
   }
 
   stopSessionReconciliation();
+  stopScreenshotQueueRetry();
 
   if (screenshotInterval) {
     clearInterval(screenshotInterval);

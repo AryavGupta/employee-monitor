@@ -25,10 +25,36 @@ const initSharp = () => {
   return sharp;
 };
 
+// Helper: try INSERT with display_id/display_label; if those columns don't
+// exist yet (migration not applied), fall back to insert without them. Lets
+// us roll out the multi-monitor desktop build before the schema migration.
+async function insertScreenshotRow(pool, baseCols, baseVals, displayId, displayLabel) {
+  // baseCols/baseVals are the always-present fields; we append display_id/label.
+  try {
+    const cols = [...baseCols, 'display_id', 'display_label'];
+    const vals = [...baseVals, displayId || null, displayLabel || null];
+    const placeholders = vals.map((_, i) => `$${i + 1}`).join(', ');
+    return await pool.query(
+      `INSERT INTO screenshots (${cols.join(', ')}) VALUES (${placeholders}) RETURNING id, captured_at`,
+      vals
+    );
+  } catch (err) {
+    if (err.code === '42703') {
+      // Column doesn't exist — insert without display fields.
+      const placeholders = baseVals.map((_, i) => `$${i + 1}`).join(', ');
+      return await pool.query(
+        `INSERT INTO screenshots (${baseCols.join(', ')}) VALUES (${placeholders}) RETURNING id, captured_at`,
+        baseVals
+      );
+    }
+    throw err;
+  }
+}
+
 // Upload screenshot (for desktop app)
 router.post('/upload', authenticateToken, async (req, res) => {
   try {
-    const { screenshot, timestamp, systemInfo } = req.body;
+    const { screenshot, timestamp, systemInfo, displayId, displayLabel } = req.body;
     const userId = req.user.userId;
     const pool = req.app.locals.pool;
 
@@ -93,10 +119,12 @@ router.post('/upload', authenticateToken, async (req, res) => {
           .getPublicUrl(thumbPath);
 
         // Store URLs in database (not base64)
-        const result = await pool.query(
-          `INSERT INTO screenshots (user_id, screenshot_url, thumbnail_url, storage_path, captured_at, file_size, system_info)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, captured_at`,
-          [userId, screenshotUrl, thumbnailUrl, fullPath, timestamp, compressedImage.length, systemInfo ? JSON.stringify(systemInfo) : null]
+        const result = await insertScreenshotRow(
+          pool,
+          ['user_id', 'screenshot_url', 'thumbnail_url', 'storage_path', 'captured_at', 'file_size', 'system_info'],
+          [userId, screenshotUrl, thumbnailUrl, fullPath, timestamp, compressedImage.length, systemInfo ? JSON.stringify(systemInfo) : null],
+          displayId,
+          displayLabel
         );
 
         return res.json({ success: true, message: 'Screenshot uploaded to storage', screenshotId: result.rows[0].id });
@@ -109,9 +137,12 @@ router.post('/upload', authenticateToken, async (req, res) => {
     // Fallback: Store as base64 data URL (original behavior)
     const screenshotUrl = `data:image/png;base64,${screenshot}`;
 
-    const result = await pool.query(
-      `INSERT INTO screenshots (user_id, screenshot_url, captured_at, system_info) VALUES ($1, $2, $3, $4) RETURNING id, captured_at`,
-      [userId, screenshotUrl, timestamp, systemInfo ? JSON.stringify(systemInfo) : null]
+    const result = await insertScreenshotRow(
+      pool,
+      ['user_id', 'screenshot_url', 'captured_at', 'system_info'],
+      [userId, screenshotUrl, timestamp, systemInfo ? JSON.stringify(systemInfo) : null],
+      displayId,
+      displayLabel
     );
 
     res.json({ success: true, message: 'Screenshot uploaded successfully', screenshotId: result.rows[0].id });

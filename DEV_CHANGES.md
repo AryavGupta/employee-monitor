@@ -4,6 +4,44 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-18 — Validation fixes: WH-on-wake, multi-monitor, screenshot offline queue
+
+Three fixes from the end-to-end validation report. Server changes are backward-compatible (no required migration); desktop changes ship in next installer rebuild.
+
+**Fix 1.4 — Working-hours check on resume from sleep** (`desktop-app/main.js` resume handler):
+- After waking, if working hours are configured AND we're outside them, stay paused (heartbeat-only) instead of restarting all intervals. The `workingHoursCheckInterval` (which survives sleep) will resume tracking when hours next open.
+- Also changed the post-wake `startWorkSession()` call from `await` to fire-and-forget (consistency with Phase 2's `startTrackingNow` fix).
+- Closes: false activity logged for up to 60s when sleep crossed a WH boundary.
+
+**Fix 4.5 — Multi-monitor capture** (`desktop-app/main.js` captureScreenshot, `screenshots.js` upload route):
+- `captureScreenshot()` now iterates ALL displays (`screen.getAllDisplays()` + `desktopCapturer.getSources()`), uploading each in parallel with `displayId` and `displayLabel` fields. Single-display setups behave identically (still 1 upload per interval).
+- Server `POST /api/screenshots/upload` accepts the new fields. Insert uses try/catch with `42703` (column-not-exists) fallback — backward compatible. Optional migration `migrations/002_screenshots_display.sql` adds the columns + composite index when you want them persisted.
+- Closes: secondary monitors invisible to the dashboard.
+
+**Fix 4.8 — Screenshot offline disk queue** (`desktop-app/main.js` new functions):
+- `uploadScreenshot()` now queues to disk on network/5xx failures via `queueScreenshot(payload)`. Files written to `app.getPath('userData')/pending-screenshots/`.
+- New `flushScreenshotQueue()` retries every 60s while tracking is active. Started via `startScreenshotQueueRetry()` in `startScreenshotCapture`, stopped via `stopScreenshotQueueRetry()` in `stopScreenshotCapture`.
+- Caps: 200 files (~200 MB) and 24h max age. Oldest evicted on overflow. Corrupted JSON dropped on read.
+- Auth failures (401) NOT queued — token-refresh path handles those. 4xx (non-401) NOT queued — server-rejected, queuing won't help.
+- Closes: silent screenshot loss on wifi/network blip.
+
+**Risk:** Low. Multi-monitor change affects single-display users only by adding two null fields to payload. Server falls back gracefully if columns missing. Disk queue is dormant until first upload failure — no behavior change in healthy state.
+
+**Build & distribute:** `npm run build:desktop` → distribute `dist/Employee Monitor Setup 1.1.0.exe`. Optional: apply `migrations/002_screenshots_display.sql` against prod DB to persist `display_id` / `display_label`.
+
+**Verification matrix:**
+| Scenario | Before | After |
+|---|---|---|
+| Sleep 18:00 → wake 22:00 (WH 09-18) | Tracks for ~60s false activity | Stays paused, heartbeat only |
+| Sleep 14:00 → wake 14:30 (WH 09-18) | Resumes tracking | Resumes tracking (unchanged) |
+| Single monitor capture | 1 upload/interval | 1 upload/interval (unchanged) |
+| Dual monitor capture | 1 upload (primary only) | 2 uploads (1 per display) |
+| Network blip during upload | Screenshot dropped | Queued to disk, retried within 60s |
+| 24h network outage | All screenshots dropped | Queued (oldest evicted past 200 files / 24h) |
+| Auth (401) failure | Drops + triggers token refresh | Drops + triggers token refresh (unchanged) |
+
+---
+
 ## 2026-04-18 — Phase 2: Desktop session-create reliability (requires installer rebuild)
 
 **Problem:** DB diagnostic confirmed Sanyam's class of failure. Teams with `working_hours_start/end` configured (Sanyam: 11:00-20:00) take a different startup path than teams without (Gaurav: NULL): they boot in heartbeat-only mode and transition to active tracking when working hours open. That transition called `await startWorkSession()` BEFORE starting the screenshot/activity intervals — and `startWorkSession`'s axios call had **no timeout**. If the request hung, the await blocked forever, intervals never scheduled, desktop stuck in heartbeat-only for the whole day. Sanyam's DB row showed: 0 activity_logs today, 0 screenshots today, but fresh heartbeat with `idle_seconds=235`. Confirmed exactly.

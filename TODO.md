@@ -17,7 +17,20 @@ Phase 1 (Apr 18) restored attendance UI by deriving from evidence-of-life. The u
 - [x] Reorder `startTrackingNow()` so intervals start BEFORE session create — DONE
 - [x] Retry-with-backoff (3 attempts: 0s/5s/15s) in `startWorkSession()` — DONE
 - [x] Session reconciliation tick (every 5 min) — DONE
-- [ ] **Action required: rebuild installer (`cd desktop-app && npm run build`) and distribute to all employees**
+- [x] Fix 1.4 — WH check on resume from sleep (Validation report) — DONE
+- [x] Fix 4.5 — multi-monitor capture (Validation report) — DONE (server backwards-compat)
+- [x] Fix 4.8 — screenshot offline disk queue (Validation report) — DONE
+- [ ] **Action required: rebuild installer (`npm run build:desktop`) and distribute**
+- [ ] Optional: apply `admin-dashboard/migrations/002_screenshots_display.sql` to persist display_id columns
+
+**Validation findings still open (deferred):**
+- [ ] Issue 1.5 — activity buffer cap of 100 entries (16 min) silently drops on long outage. Raise to 1000 + disk-persist if cap exceeded.
+- [ ] Issue 4.6 — screenshots continue during lock-screen. **Need policy decision** — intended (after-hours unauthorized use detection) or unintended (privacy)?
+- [ ] Issue 4.7 — `captured_at` is client-supplied. Add server `received_at` and use it when client clock skews >5 min.
+- [ ] Issue 6.7 — "Microsoft® Windows® Operating System" appearing as application_name (1185 rows last 24h). Improve PowerShell process detection: when ProductName matches generic Windows, fall back to MainModule filename (msedge.exe → "Microsoft Edge").
+- [ ] Issue 2.3 — idle threshold has no debounce. Require 2 consecutive samples (20s) at new state before flipping.
+- [ ] Issue 2.4 — server-side enforcement of `maxKeyRepeat`. Flag rows with maxRepeat > N as `is_suspicious=true`.
+- [ ] Issue 2.5 (architectural) — VM/RDP guest activity invisible. Needs guest-side agent. Major scope.
 
 **Phase 2.5 — Telemetry:**
 - [ ] New endpoint `POST /api/system/event` for desktop-app failure telemetry. Log session-create failures with HTTP status + retry count to a `system_events` table. Without this, the next sessions outage is debug-blind.

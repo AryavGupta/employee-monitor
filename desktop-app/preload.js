@@ -58,5 +58,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     } else {
       console.warn(`Blocked IPC once listener on invalid channel: ${channel}`);
     }
-  }
+  },
+
+  // Sync-style request for the running app version. Used by every HTML
+  // screen to render the top-right version badge so we can confirm at a
+  // glance which build is installed.
+  getVersion: () => ipcRenderer.invoke('get-app-version')
 });
