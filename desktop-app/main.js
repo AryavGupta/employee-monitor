@@ -411,6 +411,29 @@ function updateTrayMenu() {
   tray.setToolTip(isTracking ? 'Employee Monitor - Tracking Active' : 'Employee Monitor');
 }
 
+// Single-instance lock — second launch (e.g. user double-clicking the start
+// menu shortcut while the app is already running in the tray) MUST NOT spawn
+// a new window. Without this, every launch creates a fresh BrowserWindow that
+// shows briefly with the bare purple background before its page loads, looks
+// broken, and burns RAM. We register early so the second instance can quit
+// before doing any setup.
+const gotInstanceLock = app.requestSingleInstanceLock();
+if (!gotInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
+// Hide the default Electron menu bar (File / Edit / View / Window / Help).
+// Stealth tracker UI shouldn't expose dev menus to end users.
+Menu.setApplicationMenu(null);
+
 // Initialize app
 app.on('ready', async () => {
   console.log('Starting Employee Monitor...');
@@ -1173,7 +1196,6 @@ function getWorkingHoursStatus() {
   }
 
   const now = new Date();
-  const currentDay = now.getDay() === 0 ? 7 : now.getDay(); // ISO: 1=Mon, 7=Sun
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
   // Parse time strings (handle both 'HH:MM' and 'HH:MM:SS')
@@ -1187,6 +1209,12 @@ function getWorkingHoursStatus() {
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayStr = yesterday.toISOString().split('T')[0];
 
+  // Hours-only enforcement: tracking runs every day of the week within the
+  // configured window. We deliberately do NOT consult working_days here —
+  // off-days vary across teams and change over time, so baking them into the
+  // desktop client created surprise pauses (Sanyam's team had working_days
+  // [Mon-Fri] and stopped tracking on Saturday despite his shift being 11-20).
+  // The server still stores working_days for reporting; client just ignores it.
   let isWithinHours = false;
   let shiftDate = todayStr;
 
@@ -1194,20 +1222,15 @@ function getWorkingHoursStatus() {
     // Normal shift (e.g., 09:00 - 17:00)
     isWithinHours = currentMinutes >= startMinutes && currentMinutes < endMinutes;
     shiftDate = todayStr;
-
-    if (!CONFIG.WORKING_DAYS.includes(currentDay)) {
-      isWithinHours = false;
-    }
   } else {
     // Night shift (e.g., 22:30 - 07:30) — crosses midnight
     if (currentMinutes >= startMinutes) {
-      // After start time, same day (e.g., 23:00 when shift starts 22:30)
-      isWithinHours = CONFIG.WORKING_DAYS.includes(currentDay);
+      // After start time, same calendar day (e.g., 23:00 when shift starts 22:30)
+      isWithinHours = true;
       shiftDate = todayStr; // Shift started today
     } else if (currentMinutes < endMinutes) {
-      // Before end time, next day (e.g., 03:00 when shift ends 07:30)
-      const yesterdayDay = yesterday.getDay() === 0 ? 7 : yesterday.getDay();
-      isWithinHours = CONFIG.WORKING_DAYS.includes(yesterdayDay);
+      // Before end time, shift started yesterday (e.g., 03:00 when shift ends 07:30)
+      isWithinHours = true;
       shiftDate = yesterdayStr; // Shift started yesterday
     } else {
       // Between end and start (e.g., 14:00 when shift is 22:30-07:30) — outside hours

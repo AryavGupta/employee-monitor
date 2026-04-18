@@ -23,6 +23,9 @@ Phase 1 (Apr 18) restored attendance UI by deriving from evidence-of-life. The u
 - [ ] **Action required: rebuild installer (`npm run build:desktop`) and distribute**
 - [ ] Optional: apply `admin-dashboard/migrations/002_screenshots_display.sql` to persist display_id columns
 
+**Distribution / installer:**
+- [ ] **Code-sign the desktop installer.** Currently every new build's `.exe` and the installed `Employee Monitor.exe` get quarantined by McAfee/Defender on every employee's machine — requires manual whitelist per file, per version. A code-signing cert (~$100/yr from Sectigo/DigiCert) would eliminate this. Configure via electron-builder's `win.signtoolOptions` or `win.signingHashAlgorithms`. Until then: each employee has to whitelist (a) the installer .exe AND (b) `C:\Program Files\Employee Monitor\Employee Monitor.exe` after install, on every version bump.
+
 **Validation findings still open (deferred):**
 - [ ] Issue 1.5 — activity buffer cap of 100 entries (16 min) silently drops on long outage. Raise to 1000 + disk-persist if cap exceeded.
 - [ ] Issue 4.6 — screenshots continue during lock-screen. **Need policy decision** — intended (after-hours unauthorized use detection) or unintended (privacy)?
