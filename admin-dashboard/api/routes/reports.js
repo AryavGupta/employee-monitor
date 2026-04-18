@@ -676,6 +676,29 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
       ? Math.max(Math.floor((effectiveEndTs - new Date(firstLogin)) / 1000), 0)
       : 0;
 
+    // Per-session durations — same logic the overtime endpoint uses. Sum is the
+    // real time-logged-in for the shift, excluding any gaps between sessions
+    // when the app was closed (lid down, manual close, crash before reconnect).
+    const shiftSessionDurations = sessions.map(s =>
+      s.end_time
+        ? (parseInt(s.duration_seconds) || Math.floor((new Date(s.end_time) - new Date(s.start_time)) / 1000))
+        : Math.max(Math.floor(((effectiveEndTs || new Date()) - new Date(s.start_time)) / 1000), 0)
+    );
+    const shiftSessionTotalSecs = shiftSessionDurations.reduce((a, b) => a + Math.max(b, 0), 0);
+    const shiftTotalSeconds = sessions.length > 0 ? shiftSessionTotalSecs : totalWallClock;
+    const shiftActiveSeconds = parseInt(activity.active_seconds) || 0;
+
+    const shiftSessionsOut = sessions.map((s, i) => ({
+      id: s.id,
+      start_time: s.start_time,
+      end_time: s.end_time,
+      duration_seconds: shiftSessionDurations[i],
+      active_seconds: parseInt(s.active_seconds) || 0,
+      idle_seconds: parseInt(s.idle_seconds) || 0,
+      effective_status: s.effective_status,
+      presence_idle_seconds: parseInt(s.presence_idle_seconds) || 0
+    }));
+
     res.json({
       success: true,
       data: {
@@ -690,30 +713,18 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
           is_night_shift: isNightShift,
           label: shiftLabel
         },
-        sessions: sessions.map(s => {
-          // For open sessions, cap displayed duration at effectiveEndTs (last evidence-of-life)
-          // so the session list is consistent with the summary totals.
-          const durSecs = s.end_time
-            ? (parseInt(s.duration_seconds) || Math.floor((new Date(s.end_time) - new Date(s.start_time)) / 1000))
-            : Math.max(Math.floor(((effectiveEndTs || new Date()) - new Date(s.start_time)) / 1000), 0);
-          return {
-          id: s.id,
-          start_time: s.start_time,
-          end_time: s.end_time,
-          duration_seconds: durSecs,
-          active_seconds: parseInt(s.active_seconds) || 0,
-          idle_seconds: parseInt(s.idle_seconds) || 0,
-          effective_status: s.effective_status,
-          presence_idle_seconds: parseInt(s.presence_idle_seconds) || 0
-          };
-        }),
+        sessions: shiftSessionsOut,
         summary: {
           first_login: firstLogin,
           last_logout: lastLogout,
           is_active: hasActiveSession,
-          total_seconds: totalWallClock,
-          active_seconds: parseInt(activity.active_seconds) || 0,
-          idle_seconds: Math.max(totalWallClock - (parseInt(activity.active_seconds) || 0), 0),
+          // total_seconds = sum of session durations (NOT outer first→last wall-clock).
+          // Inter-session gaps (app closed mid-shift) are not working time and shouldn't
+          // count toward Total Hours or inflate Idle. Falls back to outer wall-clock only
+          // when there are zero session rows (evidence-only mode).
+          total_seconds: shiftTotalSeconds,
+          active_seconds: shiftActiveSeconds,
+          idle_seconds: Math.max(shiftTotalSeconds - shiftActiveSeconds, 0),
           session_count: sessions.length,
           activity_count: parseInt(activity.activity_count) || 0
         }
