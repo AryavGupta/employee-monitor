@@ -905,6 +905,23 @@ router.get('/shift-attendance/overtime', authenticateToken, async (req, res) => 
       ? Math.max(Math.floor((effectiveEndTs - new Date(firstLogin)) / 1000), 0)
       : 0;
 
+    // Per-session durations (sum is the real "time logged in", excluding gaps
+    // between overtime sessions when the app was closed).
+    const sessionDurations = sessions.map(s =>
+      s.end_time
+        ? (parseInt(s.duration_seconds) || Math.floor((new Date(s.end_time) - new Date(s.start_time)) / 1000))
+        : Math.max(Math.floor(((effectiveEndTs || new Date()) - new Date(s.start_time)) / 1000), 0)
+    );
+    const sessionTotalSecs = sessionDurations.reduce((a, b) => a + Math.max(b, 0), 0);
+
+    // For overtime, total_seconds = sum of session wall-clocks (NOT outer first→last).
+    // Overtime is inherently fragmented: users open/close the app multiple times
+    // post-shift, and the inter-session gaps are NOT working time. Falling back
+    // to outer wall-clock only when there are no session rows at all (evidence-only).
+    const totalSeconds = sessions.length > 0 ? sessionTotalSecs : totalWallClock;
+    const activeSeconds = parseInt(activity.active_seconds) || 0;
+    const idleSeconds = Math.max(totalSeconds - activeSeconds, 0);
+
     res.json({
       success: true,
       data: {
@@ -919,29 +936,24 @@ router.get('/shift-attendance/overtime', authenticateToken, async (req, res) => 
           is_night_shift: isNightShift,
           label: 'Extra Hours'
         },
-        sessions: sessions.map(s => {
-          const durSecs = s.end_time
-            ? (parseInt(s.duration_seconds) || Math.floor((new Date(s.end_time) - new Date(s.start_time)) / 1000))
-            : Math.max(Math.floor(((effectiveEndTs || new Date()) - new Date(s.start_time)) / 1000), 0);
-          return {
-            id: s.id,
-            start_time: s.start_time,
-            end_time: s.end_time,
-            duration_seconds: durSecs,
-            active_seconds: parseInt(s.active_seconds) || 0,
-            idle_seconds: parseInt(s.idle_seconds) || 0,
-            effective_status: s.effective_status,
-            presence_idle_seconds: parseInt(s.presence_idle_seconds) || 0,
-            overtime: true
-          };
-        }),
+        sessions: sessions.map((s, i) => ({
+          id: s.id,
+          start_time: s.start_time,
+          end_time: s.end_time,
+          duration_seconds: sessionDurations[i],
+          active_seconds: parseInt(s.active_seconds) || 0,
+          idle_seconds: parseInt(s.idle_seconds) || 0,
+          effective_status: s.effective_status,
+          presence_idle_seconds: parseInt(s.presence_idle_seconds) || 0,
+          overtime: true
+        })),
         summary: {
           first_login: firstLogin,
           last_logout: lastLogout,
           is_active: hasActiveSession,
-          total_seconds: totalWallClock,
-          active_seconds: parseInt(activity.active_seconds) || 0,
-          idle_seconds: Math.max(totalWallClock - (parseInt(activity.active_seconds) || 0), 0),
+          total_seconds: totalSeconds,
+          active_seconds: activeSeconds,
+          idle_seconds: idleSeconds,
           session_count: sessions.length,
           activity_count: parseInt(activity.activity_count) || 0
         }
