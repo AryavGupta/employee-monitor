@@ -469,8 +469,9 @@ function AttendanceLogs({ user, onLogout }) {
               )}
 
               {/* Extra Hours / Overtime card — only renders when post-shift activity exists.
-                  Mirrors the Regular block's stat layout so the two read consistently. */}
-              {overtimeData && (overtimeData.summary?.total_seconds > 0 || overtimeData.summary?.activity_count > 0) && (
+                  Mirrors the Regular block's stat layout so the two read consistently.
+                  Hidden during shiftLoading so the refresh visual covers both blocks. */}
+              {!shiftLoading && overtimeData && (overtimeData.summary?.total_seconds > 0 || overtimeData.summary?.activity_count > 0) && (
                 <div className="al-overtime-block">
                   <div className="al-shift-header">
                     <h3>Extra Hours</h3>
