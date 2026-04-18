@@ -1666,6 +1666,16 @@ let workingHoursCheckInterval = null;
 //   in-hours, tracking overtime     → transitionToRegular()
 //   out-of-hours, not tracking, overtime enabled (toggled on) → startTrackingNow({ overtime: true })
 async function checkWorkingHoursAndToggle() {
+  // Refresh settings when idle. The heartbeat-piggyback path (sendHeartbeat ->
+  // settings_version) handles propagation while tracking, but in cold-start
+  // "idle until shift starts" mode there's NO heartbeat — so toggling
+  // track_outside_hours on the dashboard would otherwise require a desktop restart
+  // (the bug that hit Aryav: dashboard toggle didn't reach idle desktop until kill+relaunch).
+  // Cost: 2 API calls/min/idle desktop, only when working hours are configured.
+  if (!isTracking && CONFIG.USER_TOKEN) {
+    await fetchTeamSettings().catch(err => console.warn('Idle settings refresh failed:', err.message));
+  }
+
   const shouldTrack = shouldTrackNow();
 
   if (shouldTrack && !isTracking) {
