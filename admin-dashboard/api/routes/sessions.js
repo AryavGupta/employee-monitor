@@ -210,7 +210,86 @@ router.get('/', authenticateToken, async (req, res) => {
     params.push(parseInt(limit), parseInt(offset));
 
     const result = await pool.query(query, params);
-    res.json({ success: true, data: result.rows });
+
+    // Evidence-based virtual sessions: users with activity_logs/screenshots/heartbeat
+    // in the date window but no real session row. Same fragile-startWorkSession()
+    // problem that affects /shift-attendance — make this endpoint independent of
+    // session-creation success too. Skipped when isActive filter is set (caller
+    // wants real session state) or when no date range is given (open-ended query).
+    let virtualRows = [];
+    if (startDate && endDate && isActive === undefined) {
+      let scopeFilter = '';
+      const scopeParams = [startDate, endDate];
+      if (req.user.role !== 'admin') {
+        scopeFilter = `AND u.id = $${scopeParams.length + 1}`;
+        scopeParams.push(req.user.userId);
+      } else if (userId) {
+        scopeFilter = `AND u.id = $${scopeParams.length + 1}`;
+        scopeParams.push(userId);
+      }
+
+      const synthResult = await pool.query(
+        `WITH has_session AS (
+           SELECT DISTINCT user_id FROM sessions
+           WHERE start_time >= $1 AND start_time <= $2
+         )
+         SELECT u.id AS user_id, u.full_name, u.email,
+                LEAST(
+                  (SELECT MIN(timestamp) FROM activity_logs
+                     WHERE user_id = u.id AND timestamp >= $1 AND timestamp <= $2),
+                  (SELECT MIN(captured_at) FROM screenshots
+                     WHERE user_id = u.id AND captured_at >= $1 AND captured_at <= $2)
+                ) AS first_evidence,
+                GREATEST(
+                  (SELECT last_heartbeat FROM user_presence WHERE user_id = u.id),
+                  (SELECT MAX(timestamp) FROM activity_logs
+                     WHERE user_id = u.id AND timestamp >= $1 AND timestamp <= $2),
+                  (SELECT MAX(captured_at) FROM screenshots
+                     WHERE user_id = u.id AND captured_at >= $1 AND captured_at <= $2)
+                ) AS last_evidence,
+                p.last_heartbeat,
+                p.idle_seconds,
+                p.status AS presence_status
+         FROM users u
+         LEFT JOIN user_presence p ON p.user_id = u.id
+         WHERE u.id NOT IN (SELECT user_id FROM has_session) ${scopeFilter}`,
+        scopeParams
+      );
+
+      const nowMs = Date.now();
+      const LIVE_GRACE_MS = 90 * 1000;
+      virtualRows = synthResult.rows
+        .filter(r => r.first_evidence) // skip users with truly no data
+        .map(r => {
+          const lastMs = r.last_evidence ? new Date(r.last_evidence).getTime() : null;
+          const isLive = lastMs !== null && (nowMs - lastMs) <= LIVE_GRACE_MS;
+          const endTime = isLive ? null : r.last_evidence;
+          const effectiveEndMs = isLive ? nowMs : (lastMs || new Date(r.first_evidence).getTime());
+          return {
+            id: `virtual-${r.user_id}-${startDate}`,
+            user_id: r.user_id,
+            full_name: r.full_name,
+            email: r.email,
+            start_time: r.first_evidence,
+            end_time: endTime,
+            duration_seconds: Math.max(Math.floor((effectiveEndMs - new Date(r.first_evidence).getTime()) / 1000), 0),
+            active_seconds: 0,
+            idle_seconds: r.idle_seconds || 0,
+            is_active: isLive,
+            last_heartbeat: r.last_heartbeat,
+            effective_active: isLive,
+            effective_status: isLive
+              ? (r.presence_status === 'idle' ? 'idle' : 'active')
+              : 'logged_out',
+            _virtual: true
+          };
+        });
+    }
+
+    const combined = [...result.rows, ...virtualRows]
+      .sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
+
+    res.json({ success: true, data: combined });
   } catch (error) {
     console.error('Get sessions error:', error);
     res.status(500).json({ success: false, message: 'Failed to retrieve sessions' });

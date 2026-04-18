@@ -4,6 +4,20 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-18 — User Activity tab: virtual sessions from evidence (Phase 1.3)
+
+**Problem:** After Phase 1, Shift Attendance showed login/logout correctly but the User Activity tab still showed "0 sessions found" because it calls `GET /api/sessions` which queries the sessions table directly.
+
+**Fix:** `admin-dashboard/api/routes/sessions.js` `/` endpoint (lines 212+): after the real session SELECT, run an evidence query for users in scope who have NO session row in the date window but DO have activity_logs/screenshots/heartbeat. Synthesize a virtual session row per such user with `id = "virtual-{userId}-{startDate}"`, `start_time = first evidence`, `end_time = last evidence` (null if live within 90s), `effective_status = active|idle|logged_out` based on liveness + presence status. Combined list sorted by `start_time DESC`. Skipped when `isActive` filter is set or no date range is given.
+
+**Risk:** Low. Read-only addition, scoped by same role rules as the existing query (admin sees all or filtered by `userId`; everyone else sees only own).
+
+**Verification post-deploy:** User Activity tab → 18-04-2026 → expect Gaurav, Sourabh visible as virtual sessions with login ≈ first activity time, status = Active if currently live.
+
+**Not fixed by this change:** Sessions table still empty — Phase 2 (desktop) is what restores real session rows.
+
+---
+
 ## 2026-04-18 — Attendance: evidence-based fallback when sessions row missing
 
 **Problem:** Shift Attendance and User Activity tabs showed `--` / 0h 0m for users with valid activity_logs and screenshots on Apr 18 (e.g., Gaurav Rawat 8:14 AM onwards). Root cause: `/shift-attendance` derived `first_login`/`last_logout`/`total_seconds` exclusively from the `sessions` table. Active time looked correct because it came from `activity_logs`. Diagnostic showed the `sessions` table had **zero new rows for the entire org on Apr 18** — `startWorkSession()` failing silently across the fleet.
