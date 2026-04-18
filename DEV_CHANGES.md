@@ -4,6 +4,38 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-18 — Phase 2: Desktop session-create reliability (requires installer rebuild)
+
+**Problem:** DB diagnostic confirmed Sanyam's class of failure. Teams with `working_hours_start/end` configured (Sanyam: 11:00-20:00) take a different startup path than teams without (Gaurav: NULL): they boot in heartbeat-only mode and transition to active tracking when working hours open. That transition called `await startWorkSession()` BEFORE starting the screenshot/activity intervals — and `startWorkSession`'s axios call had **no timeout**. If the request hung, the await blocked forever, intervals never scheduled, desktop stuck in heartbeat-only for the whole day. Sanyam's DB row showed: 0 activity_logs today, 0 screenshots today, but fresh heartbeat with `idle_seconds=235`. Confirmed exactly.
+
+**Fix (`desktop-app/main.js`):**
+
+1. **`startWorkSession()` (lines ~2364)** — added 10s timeout per attempt + 3-attempt retry-with-backoff (0s/5s/15s, mirrors `endWorkSession` pattern). Auth failures (401/403) skip retries since the token-refresh layer handles them. Always resolves — never hangs.
+
+2. **`startTrackingNow()` (lines ~1444)** — reordered so `startActivityTracking()`, `startHeartbeat()`, `captureScreenshot()`, and `setInterval(captureScreenshot, ...)` run BEFORE session creation. `startWorkSession()` is now fire-and-forget: tracking is never gated on session creation. Even if all 3 retries fail, screenshots and activity continue.
+
+3. **Session reconciliation tick (new)** — every 5 min, if `isTracking && !currentSessionId && CONFIG.USER_TOKEN`, retry `startWorkSession()`. Heals mid-day failures without requiring app restart. Started by `startScreenshotCapture()`, stopped by `stopScreenshotCapture()`. Safe across pause/resume because pause sets `isTracking=false`.
+
+**Risk:** Low for Gaurav-class users (no working hours) — only difference is the no-await on session start, which couldn't have hung anyway (no timeout was the issue). Medium-low for Sanyam-class users — the new path is what they need; intervals start unconditionally.
+
+**No server changes.** The Vercel deploy from earlier today is sufficient — Phase 1 + 1.3 + night-shift fix already restore the dashboard. Phase 2 fixes the upstream so the dashboard sees real session rows again going forward.
+
+**Build & distribute:**
+1. `cd desktop-app && npm run build` — produces `dist/Employee Monitor Setup 1.0.0.exe`
+2. Distribute the new installer to all employees
+3. Each employee runs the installer (over the existing install)
+4. After restart, Sanyam-class users will be tracking within seconds (intervals start before session create)
+5. Verify on dashboard: Active Now should reflect real tracking, sessions table should populate
+
+**Verification (post-rebuild on a test machine):**
+- Set test team's working_hours to a window starting 2 minutes from now
+- Start the desktop app NOW (outside working hours) → should be heartbeat-only ✓
+- Wait 2 min → at the WH boundary, intervals start immediately (don't wait for session API roundtrip)
+- Check DB for activity_logs/screenshots within seconds of WH start
+- Even if session API is slow, activity flows; session row appears within ~30s (or in next 5-min reconciliation tick)
+
+---
+
 ## 2026-04-18 — Fix: night-shift double-attribution in virtual sessions
 
 **Problem:** After Phase 1.3, Neeraj (night shift 22:30-07:30) appeared in User Activity for Apr 18 with login 12:00 AM, no logout, status Active. His real session was Apr 17 22:47 → Apr 18 06:59 (correctly shown in Apr 17 Shift Attendance as Night Shift 8h 11m). Apr 18 should not show Neeraj at all until he starts his Apr 18 night shift at 22:30.

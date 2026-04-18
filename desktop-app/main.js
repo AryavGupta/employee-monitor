@@ -1441,6 +1441,13 @@ async function checkWorkingHoursAndToggle() {
 }
 
 // Internal: start tracking (called by working hours check)
+// Order matters: start screenshot/activity/heartbeat intervals FIRST, then kick
+// off session creation in the background. Session creation must NOT gate
+// tracking — if /api/sessions/start hangs or fails, tracking still runs and
+// the reconciliation tick will retry the session create later. Awaiting
+// session creation here was the Apr 18 Sanyam-class failure: a hung axios
+// call left isTracking=true but no intervals scheduled, so the desktop
+// silently dropped to heartbeat-only mode for the rest of the day.
 async function startTrackingNow() {
   if (isTracking) return;
 
@@ -1448,11 +1455,13 @@ async function startTrackingNow() {
   console.log('Starting screenshot capture...');
   updateTrayMenu();
 
-  await startWorkSession();
   startActivityTracking();
   startHeartbeat();
   captureScreenshot();
   screenshotInterval = setInterval(captureScreenshot, CONFIG.SCREENSHOT_INTERVAL);
+
+  // Fire-and-forget. startWorkSession has its own retry/timeout.
+  startWorkSession().catch(err => console.error('startWorkSession threw:', err?.message));
 }
 
 // Internal: pause tracking (called by working hours check)
@@ -1494,6 +1503,28 @@ async function startScreenshotCapture() {
     // No working hours configured — track all the time
     await startTrackingNow();
   }
+
+  startSessionReconciliation();
+}
+
+// Heals mid-day session-create failures: every 5 min, if we're tracking but
+// have no session id, retry. Without this, a single startWorkSession failure
+// at boot leaves the entire shift with no session row.
+let sessionReconcileInterval = null;
+function startSessionReconciliation() {
+  if (sessionReconcileInterval) return;
+  sessionReconcileInterval = setInterval(() => {
+    if (isTracking && !currentSessionId && CONFIG.USER_TOKEN) {
+      console.log('No active session id — attempting reconciliation');
+      startWorkSession().catch(err => console.error('reconcile startWorkSession threw:', err?.message));
+    }
+  }, 5 * 60 * 1000);
+}
+function stopSessionReconciliation() {
+  if (sessionReconcileInterval) {
+    clearInterval(sessionReconcileInterval);
+    sessionReconcileInterval = null;
+  }
 }
 
 async function stopScreenshotCapture() {
@@ -1502,6 +1533,8 @@ async function stopScreenshotCapture() {
     clearInterval(workingHoursCheckInterval);
     workingHoursCheckInterval = null;
   }
+
+  stopSessionReconciliation();
 
   if (screenshotInterval) {
     clearInterval(screenshotInterval);
@@ -2361,31 +2394,56 @@ function stopHeartbeat() {
 // Work Session Management (PRESERVED)
 // =====================================================
 
+// Retry-with-backoff. Critical: must always resolve (never hang) so callers
+// like startTrackingNow() don't get blocked. Without a timeout the previous
+// version could await forever on a Vercel cold-start hiccup, leaving tracking
+// permanently stuck in heartbeat-only mode (the Sanyam-class failure on Apr 18).
 async function startWorkSession() {
-  try {
-    const response = await axios.post(
-      `${CONFIG.API_URL}/api/sessions/start`,
-      { notes: `Session started from ${os.hostname()}` },
-      {
-        headers: {
-          'Authorization': `Bearer ${CONFIG.USER_TOKEN}`,
-          'Content-Type': 'application/json'
+  const attempts = [
+    { delay: 0, timeout: 10000 },
+    { delay: 5000, timeout: 10000 },
+    { delay: 15000, timeout: 10000 }
+  ];
+
+  for (let i = 0; i < attempts.length; i++) {
+    const { delay, timeout } = attempts[i];
+    if (delay > 0) await new Promise(r => setTimeout(r, delay));
+    try {
+      const response = await axios.post(
+        `${CONFIG.API_URL}/api/sessions/start`,
+        { notes: `Session started from ${os.hostname()}` },
+        {
+          headers: {
+            'Authorization': `Bearer ${CONFIG.USER_TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          timeout
         }
+      );
+
+      if (response.data.success) {
+        currentSessionId = response.data.data.id;
+        totalActiveSeconds = 0;
+        totalIdleSeconds = 0;
+        console.log('Work session started:', currentSessionId);
+        return response.data;
       }
-    );
-
-    if (response.data.success) {
-      currentSessionId = response.data.data.id;
-      totalActiveSeconds = 0;
-      totalIdleSeconds = 0;
-      console.log('Work session started:', currentSessionId);
+      // 2xx without success flag → don't retry, server logic decided no
+      console.error('Session start returned non-success:', response.data?.message);
+      return response.data;
+    } catch (error) {
+      const status = error.response?.status;
+      // Don't retry auth failures — token-refresh layer handles those.
+      if (status === 401 || status === 403) {
+        console.error('Session start auth failure:', status);
+        return null;
+      }
+      console.error(`Session start attempt ${i + 1}/${attempts.length} failed:`, error.message);
     }
-
-    return response.data;
-  } catch (error) {
-    console.error('Error starting work session:', error.message);
-    return null;
   }
+
+  // All retries exhausted. Tracking continues; reconciliation tick will retry later.
+  return null;
 }
 
 async function endWorkSession() {

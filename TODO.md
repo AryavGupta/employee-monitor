@@ -12,11 +12,12 @@
 
 Phase 1 (Apr 18) restored attendance UI by deriving from evidence-of-life. The upstream issue — `sessions` table getting zero new rows for the entire org on Apr 18 — is still present. Phase 2 fixes the desktop-app side. See `DEV_CHANGES.md` for Phase 1 context.
 
-**Phase 2 — Desktop app session-create reliability (requires installer rebuild):**
-- [ ] Add `timeout: 10000` to `startWorkSession()` axios call (`desktop-app/main.js:2366`). It's the only axios call in the file without a timeout — if Vercel hangs, the await blocks forever and tracking never starts (this is what stranded Sanyam in heartbeat-only mode on Apr 18).
-- [ ] Reorder `startTrackingNow()` (`desktop-app/main.js:1444-1456`): start `startActivityTracking()` / `startHeartbeat()` / `captureScreenshot()` / `setInterval(captureScreenshot, ...)` BEFORE awaiting `startWorkSession()`. Session creation must NOT gate tracking.
-- [ ] Retry-with-backoff in `startWorkSession()`: 3 attempts at 0s/5s/15s (mirror `endWorkSession()` pattern at `main.js:2397-2425`).
-- [ ] Session reconciliation tick: every 5 min, if `isTracking && !currentSessionId`, retry `startWorkSession()`. Heals mid-day failures without restart.
+**Phase 2 — Desktop app session-create reliability (DONE in code, requires installer rebuild + redistribution):**
+- [x] Add `timeout: 10000` to `startWorkSession()` axios call — DONE
+- [x] Reorder `startTrackingNow()` so intervals start BEFORE session create — DONE
+- [x] Retry-with-backoff (3 attempts: 0s/5s/15s) in `startWorkSession()` — DONE
+- [x] Session reconciliation tick (every 5 min) — DONE
+- [ ] **Action required: rebuild installer (`cd desktop-app && npm run build`) and distribute to all employees**
 
 **Phase 2.5 — Telemetry:**
 - [ ] New endpoint `POST /api/system/event` for desktop-app failure telemetry. Log session-create failures with HTTP status + retry count to a `system_events` table. Without this, the next sessions outage is debug-blind.
