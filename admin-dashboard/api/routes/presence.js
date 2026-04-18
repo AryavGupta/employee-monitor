@@ -171,26 +171,33 @@ router.get('/summary', authenticateToken, authorizeAdminOrManager, async (req, r
     try { await closeAllStaleSessions(pool); } catch (e) { /* non-critical */ }
 
     // Aggregate over the same effective_status definition used by /online so dashboard
-    // counts and per-user statuses can never disagree. logged_out rolls into offline_count.
+    // counts and per-user statuses can never disagree. Compute once per row via a
+    // subquery rather than inlining EFFECTIVE_STATUS_SQL three times in the outer
+    // SELECT — PostgreSQL would likely dedupe the CSE but doing it explicitly avoids
+    // any chance of the subquery firing 3× per row. logged_out rolls into offline_count.
     let query = `
       SELECT
-        COUNT(CASE WHEN ${EFFECTIVE_STATUS_SQL} = 'online' THEN 1 END) as online_count,
-        COUNT(CASE WHEN ${EFFECTIVE_STATUS_SQL} = 'idle' THEN 1 END) as idle_count,
-        COUNT(CASE WHEN ${EFFECTIVE_STATUS_SQL} IN ('offline', 'logged_out') THEN 1 END) as offline_count,
+        SUM(CASE WHEN status_calc = 'online' THEN 1 ELSE 0 END) as online_count,
+        SUM(CASE WHEN status_calc = 'idle' THEN 1 ELSE 0 END) as idle_count,
+        SUM(CASE WHEN status_calc IN ('offline', 'logged_out') THEN 1 ELSE 0 END) as offline_count,
         (SELECT COUNT(*) FROM users WHERE is_active = true{TOTAL_FILTER}) as total_users
-      FROM user_presence p
-      JOIN users u ON p.user_id = u.id
-      WHERE u.is_active = true
+      FROM (
+        SELECT ${EFFECTIVE_STATUS_SQL} as status_calc
+        FROM user_presence p
+        JOIN users u ON p.user_id = u.id
+        WHERE u.is_active = true{INNER_FILTER}
+      ) presence_status
     `;
 
     const params = [];
 
-    // Team managers only see their team stats
+    // Team managers only see their team stats. The filter goes INSIDE the subquery
+    // (where `u` is in scope) and into the total_users subquery — both must align.
     if (req.user.role === 'team_manager') {
       const managedTeamIds = await getManagedTeamIds(pool, req.user.userId);
       if (managedTeamIds.length > 0) {
         const placeholders = managedTeamIds.map((_, i) => `$${i + 1}`).join(', ');
-        query += ` AND u.team_id IN (${placeholders})`;
+        query = query.replace('{INNER_FILTER}', ` AND u.team_id IN (${placeholders})`);
         query = query.replace('{TOTAL_FILTER}', ` AND team_id IN (${placeholders})`);
         params.push(...managedTeamIds);
       } else {
@@ -200,6 +207,7 @@ router.get('/summary', authenticateToken, authorizeAdminOrManager, async (req, r
         });
       }
     } else {
+      query = query.replace('{INNER_FILTER}', '');
       query = query.replace('{TOTAL_FILTER}', '');
     }
 

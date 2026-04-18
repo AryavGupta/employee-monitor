@@ -1741,30 +1741,12 @@ async function startTrackingNow({ overtime = false } = {}) {
   startWorkSession({ overtime }).catch(err => console.error('startWorkSession threw:', err?.message));
 }
 
-// Internal: pause tracking (called by working hours check) — preserved for backwards
-// compatibility with callers (e.g. powerMonitor handlers). Quietly stops everything;
-// does NOT push a logged_out signal. Use pauseTrackingForLogout when intent is shift end.
-async function pauseTrackingNow() {
-  if (!isTracking) return;
-
-  console.log('Pausing tracking...');
-
-  if (screenshotInterval) {
-    clearInterval(screenshotInterval);
-    screenshotInterval = null;
-  }
-  stopActivityTracking();
-  await endWorkSession();
-  stopHeartbeat();
-
-  isTracking = false;
-  currentSessionIsOvertime = false;
-  updateTrayMenu();
-}
-
-// Shift end with overtime disabled: same as pauseTrackingNow but pushes a
-// logged_out heartbeat first so the dashboard flips immediately. Order matters
-// — push status BEFORE stopHeartbeat so the request completes.
+// Shift end with overtime disabled. Order is load-bearing:
+//   1. stopHeartbeat FIRST so no in-flight interval-fired heartbeat can overwrite
+//      the logged_out status with 'online'/'idle' during endWorkSession (which
+//      can block for up to 45s on retry path).
+//   2. endWorkSession to settle the session row.
+//   3. pushLoggedOutSignal as the FINAL write — it stays the persistent state.
 async function pauseTrackingForLogout() {
   if (!isTracking) return;
 
@@ -1773,9 +1755,9 @@ async function pauseTrackingForLogout() {
     screenshotInterval = null;
   }
   stopActivityTracking();
+  stopHeartbeat();
   await endWorkSession();
   await pushLoggedOutSignal();
-  stopHeartbeat();
 
   isTracking = false;
   currentSessionIsOvertime = false;
@@ -1849,8 +1831,11 @@ function startSessionReconciliation() {
   if (sessionReconcileInterval) return;
   sessionReconcileInterval = setInterval(() => {
     if (isTracking && !currentSessionId && CONFIG.USER_TOKEN) {
-      console.log('No active session id — attempting reconciliation');
-      startWorkSession().catch(err => console.error('reconcile startWorkSession threw:', err?.message));
+      // Preserve overtime context — without this, reconciling during the post-shift
+      // window would create a regular session row and silently mis-tag the work.
+      console.log(`No active session id — attempting reconciliation (overtime=${currentSessionIsOvertime})`);
+      startWorkSession({ overtime: currentSessionIsOvertime })
+        .catch(err => console.error('reconcile startWorkSession threw:', err?.message));
     }
   }, 5 * 60 * 1000);
 }

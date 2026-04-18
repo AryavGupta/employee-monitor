@@ -3,6 +3,20 @@ const router = express.Router();
 const { authenticateToken, authorizeAdmin } = require('./auth');
 const { closeAllStaleSessions } = require('./sessions');
 
+// Per-session effective_status. Used by /shift-attendance and /shift-attendance/overtime
+// (and intentionally distinct from presence.js EFFECTIVE_STATUS_SQL — sessions track work
+// intervals, presence tracks live status). Kept here as a constant to avoid drift between
+// the regular and overtime queries below.
+const SESSION_EFFECTIVE_STATUS_SQL = `
+  CASE
+    WHEN s.end_time IS NOT NULL THEN 'logged_out'
+    WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' AND p.status = 'idle' THEN 'idle'
+    WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' THEN 'active'
+    WHEN s.is_active = true THEN 'disconnected'
+    ELSE 'logged_out'
+  END
+`;
+
 // Get productivity metrics with date range and grouping
 router.get('/productivity', authenticateToken, async (req, res) => {
   try {
@@ -558,13 +572,7 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
       `SELECT s.id, s.start_time, s.end_time, s.is_active,
               s.duration_seconds, s.active_seconds, s.idle_seconds,
               p.last_heartbeat, p.status as presence_status, p.idle_seconds as presence_idle_seconds,
-              CASE
-                WHEN s.end_time IS NOT NULL THEN 'logged_out'
-                WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' AND p.status = 'idle' THEN 'idle'
-                WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' THEN 'active'
-                WHEN s.is_active = true THEN 'disconnected'
-                ELSE 'logged_out'
-              END as effective_status
+              ${SESSION_EFFECTIVE_STATUS_SQL} as effective_status
        FROM sessions s
        LEFT JOIN user_presence p ON s.user_id = p.user_id
        WHERE s.user_id = $1 AND s.start_time >= $2 AND s.start_time < $3
@@ -802,13 +810,7 @@ router.get('/shift-attendance/overtime', authenticateToken, async (req, res) => 
         `SELECT s.id, s.start_time, s.end_time, s.is_active,
                 s.duration_seconds, s.active_seconds, s.idle_seconds,
                 p.last_heartbeat, p.status as presence_status, p.idle_seconds as presence_idle_seconds,
-                CASE
-                  WHEN s.end_time IS NOT NULL THEN 'logged_out'
-                  WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' AND p.status = 'idle' THEN 'idle'
-                  WHEN s.is_active = true AND p.last_heartbeat > NOW() - INTERVAL '90 seconds' THEN 'active'
-                  WHEN s.is_active = true THEN 'disconnected'
-                  ELSE 'logged_out'
-                END as effective_status
+                ${SESSION_EFFECTIVE_STATUS_SQL} as effective_status
          FROM sessions s
          LEFT JOIN user_presence p ON s.user_id = p.user_id
          WHERE s.user_id = $1 AND s.start_time >= $2 AND s.start_time < $3
