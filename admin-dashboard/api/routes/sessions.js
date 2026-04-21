@@ -4,10 +4,13 @@ const { authenticateToken } = require('./auth');
 
 // Close stale active sessions for a specific user.
 // Uses CTE to compute end_time once instead of 6+ repeated subqueries.
+// end_time is floored at s.start_time — p.last_heartbeat can predate the current
+// session (prior session's leftover heartbeat), which would otherwise produce a
+// negative duration. See BUG-2026-04-21-01.
 async function closeStaleSessionsForUser(pool, userId) {
   return pool.query(
     `WITH end_times AS (
-       SELECT s.id,
+       SELECT s.id, s.start_time,
          COALESCE(
            GREATEST(
              (SELECT last_heartbeat FROM user_presence WHERE user_id = $1),
@@ -21,8 +24,8 @@ async function closeStaleSessionsForUser(pool, userId) {
      )
      UPDATE sessions s SET
        is_active = false,
-       end_time = et.end_val,
-       duration_seconds = EXTRACT(EPOCH FROM (et.end_val - s.start_time))
+       end_time = GREATEST(et.end_val, s.start_time),
+       duration_seconds = GREATEST(EXTRACT(EPOCH FROM (et.end_val - s.start_time)), 0)
      FROM end_times et WHERE s.id = et.id`,
     [userId]
   );
@@ -30,6 +33,7 @@ async function closeStaleSessionsForUser(pool, userId) {
 
 // Close ALL stale sessions across all users where heartbeat is older than 5 minutes.
 // Uses CTE to compute end_time once per session instead of 6+ repeated subqueries per row.
+// See closeStaleSessionsForUser for why end_time is floored at s.start_time.
 async function closeAllStaleSessions(pool) {
   return pool.query(
     `WITH stale AS (
@@ -50,8 +54,8 @@ async function closeAllStaleSessions(pool) {
      )
      UPDATE sessions s SET
        is_active = false,
-       end_time = st.end_val,
-       duration_seconds = EXTRACT(EPOCH FROM (st.end_val - s.start_time))
+       end_time = GREATEST(st.end_val, s.start_time),
+       duration_seconds = GREATEST(EXTRACT(EPOCH FROM (st.end_val - s.start_time)), 0)
      FROM stale st WHERE s.id = st.id`
   );
 }
@@ -114,15 +118,22 @@ router.post('/end', authenticateToken, async (req, res) => {
       ? { sql: `WHERE id = $1 AND user_id = $2 AND is_active = true`, params: [sessionId, userId] }
       : { sql: `WHERE user_id = $1 AND is_active = true`, params: [userId] };
 
+    // Data-integrity floor: end_time must be >= start_time and duration >= 0.
+    // CURRENT_TIMESTAMP is normally ahead of start_time, but the GREATEST guards
+    // are cheap insurance against clock skew and mirror the stale-close helpers.
+    // See BUG-2026-04-21-01.
     let result;
     if (trackedDuration !== null) {
-      const baseParams = [...targetClause.params, trackedDuration, totalActiveTime, totalIdleTime, notes];
+      const clampedDuration = Math.max(0, trackedDuration);
+      const clampedActive = Math.max(0, totalActiveTime);
+      const clampedIdle = Math.max(0, totalIdleTime);
+      const baseParams = [...targetClause.params, clampedDuration, clampedActive, clampedIdle, notes];
       const p = (i) => `$${i}`;
       try {
         result = await pool.query(
           `UPDATE sessions SET
              is_active = false,
-             end_time = CURRENT_TIMESTAMP,
+             end_time = GREATEST(CURRENT_TIMESTAMP, start_time),
              duration_seconds = ${p(targetClause.params.length + 1)},
              active_seconds = ${p(targetClause.params.length + 2)},
              idle_seconds = ${p(targetClause.params.length + 3)},
@@ -135,16 +146,17 @@ router.post('/end', authenticateToken, async (req, res) => {
         result = await pool.query(
           `UPDATE sessions SET
              is_active = false,
-             end_time = CURRENT_TIMESTAMP,
+             end_time = GREATEST(CURRENT_TIMESTAMP, start_time),
              duration_seconds = ${p(targetClause.params.length + 1)}
            ${targetClause.sql} RETURNING *`,
-          [...targetClause.params, trackedDuration]
+          [...targetClause.params, clampedDuration]
         );
       }
     } else {
       result = await pool.query(
-        `UPDATE sessions SET is_active = false, end_time = CURRENT_TIMESTAMP,
-         duration_seconds = EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - start_time))
+        `UPDATE sessions SET is_active = false,
+           end_time = GREATEST(CURRENT_TIMESTAMP, start_time),
+           duration_seconds = GREATEST(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - start_time)), 0)
          ${targetClause.sql} RETURNING *`,
         targetClause.params
       );

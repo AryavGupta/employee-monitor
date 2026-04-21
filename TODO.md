@@ -8,6 +8,16 @@
 
 ## Currently Pending
 
+### P0 — 2026-04-21 bug fixes (rollout)
+
+Code landed in `DEV_CHANGES.md` 2026-04-21 entry. To finish rollout:
+
+- [ ] Apply one-time DB cleanup: `UPDATE sessions SET end_time = start_time, duration_seconds = 0 WHERE end_time < start_time;` (review the SELECT first).
+- [ ] Push to `main` → Vercel redeploys dashboard + API.
+- [ ] Bump `desktop-app/package.json` patch version → `npm run build:desktop` → distribute new installer.
+- [ ] Run diagnostic SQL for BUG-03 (Himanshu). If team's `track_outside_hours = false`, enable it via Teams settings.
+- [ ] Monitor `SELECT application_name, COUNT(*) FROM activity_logs WHERE timestamp > NOW() - INTERVAL '1 hour' GROUP BY 1` for 24h after rollout — "Unknown" share should drop to < 1%.
+
 ### P0 — Overtime / Extra Hours mode (deploy steps)
 
 Code complete (see DEV_CHANGES.md 2026-04-18 entry). To finish rollout:

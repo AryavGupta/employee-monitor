@@ -1,11 +1,8 @@
 {
   "name": "employee-monitoring-system",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Desktop employee monitoring application with screenshot capture",
-  "author": {
-    "name": "Aryav Gupta",
-    "email": "aryavgupta2005@gmail.com"
-  },
+  "author": "Your Company",
   "main": "desktop-app/main.js",
   "scripts": {
     "start:desktop": "electron desktop-app/main.js",
@@ -22,7 +19,6 @@
     "screenshot",
     "tracking"
   ],
-  "author": "Your Company",
   "license": "ISC",
   "build": {
     "appId": "com.employeemonitor.app",
@@ -82,8 +78,18 @@
     },
     "linux": {
       "target": [
-        { "target": "deb", "arch": ["x64"] },
-        { "target": "AppImage", "arch": ["x64"] }
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "desktop-app/assets/icon.png",
       "category": "Utility",
@@ -92,7 +98,13 @@
       }
     },
     "deb": {
-      "depends": ["xdotool", "libxss1", "xinput", "libappindicator3-1", "libnotify4"],
+      "depends": [
+        "xdotool",
+        "libxss1",
+        "xinput",
+        "libappindicator3-1",
+        "libnotify4"
+      ],
       "artifactName": "EmployeeMonitor-${version}.${ext}",
       "maintainer": "Aryav Gupta <aryavgupta2005@gmail.com>"
     }

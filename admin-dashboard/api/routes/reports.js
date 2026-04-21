@@ -679,11 +679,14 @@ router.get('/shift-attendance', authenticateToken, async (req, res) => {
     // Per-session durations — same logic the overtime endpoint uses. Sum is the
     // real time-logged-in for the shift, excluding any gaps between sessions
     // when the app was closed (lid down, manual close, crash before reconnect).
-    const shiftSessionDurations = sessions.map(s =>
-      s.end_time
+    // Floor each row at 0: legacy rows from before the negative-duration guard
+    // (BUG-2026-04-21-01) may still carry end_time < start_time.
+    const shiftSessionDurations = sessions.map(s => {
+      const raw = s.end_time
         ? (parseInt(s.duration_seconds) || Math.floor((new Date(s.end_time) - new Date(s.start_time)) / 1000))
-        : Math.max(Math.floor(((effectiveEndTs || new Date()) - new Date(s.start_time)) / 1000), 0)
-    );
+        : Math.floor(((effectiveEndTs || new Date()) - new Date(s.start_time)) / 1000);
+      return Math.max(raw, 0);
+    });
     const shiftSessionTotalSecs = shiftSessionDurations.reduce((a, b) => a + Math.max(b, 0), 0);
     const shiftTotalSeconds = sessions.length > 0 ? shiftSessionTotalSecs : totalWallClock;
     const shiftActiveSeconds = parseInt(activity.active_seconds) || 0;
@@ -917,12 +920,14 @@ router.get('/shift-attendance/overtime', authenticateToken, async (req, res) => 
       : 0;
 
     // Per-session durations (sum is the real "time logged in", excluding gaps
-    // between overtime sessions when the app was closed).
-    const sessionDurations = sessions.map(s =>
-      s.end_time
+    // between overtime sessions when the app was closed). Floor at 0 — see
+    // BUG-2026-04-21-01 note in the regular shift path above.
+    const sessionDurations = sessions.map(s => {
+      const raw = s.end_time
         ? (parseInt(s.duration_seconds) || Math.floor((new Date(s.end_time) - new Date(s.start_time)) / 1000))
-        : Math.max(Math.floor(((effectiveEndTs || new Date()) - new Date(s.start_time)) / 1000), 0)
-    );
+        : Math.floor(((effectiveEndTs || new Date()) - new Date(s.start_time)) / 1000);
+      return Math.max(raw, 0);
+    });
     const sessionTotalSecs = sessionDurations.reduce((a, b) => a + Math.max(b, 0), 0);
 
     // For overtime, total_seconds = sum of session wall-clocks (NOT outer first→last).

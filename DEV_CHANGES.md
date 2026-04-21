@@ -4,6 +4,80 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-21 — Three production bug fixes (BUG-2026-04-21-01/02/03)
+
+Plan: `~/.claude/plans/i-need-you-to-recursive-snail.md`. Bug registry: `~/.claude/projects/.../memory/project_bug_registry.md`.
+
+### BUG-01 — Negative session duration (Sanyam Ahuja: login 2:14 PM, logout 2:07 PM, duration -1h 8m)
+
+**Root cause:** `closeStaleSessionsForUser` / `closeAllStaleSessions` in `admin-dashboard/api/routes/sessions.js` used `user_presence.last_heartbeat` as a fallback for `end_time` without flooring at `s.start_time`. A leftover heartbeat from a prior session (before sleep/suspend / switch-user) wrote an `end_time` earlier than the new session's `start_time`.
+
+**Fix:** Wrap computed `end_time` with `GREATEST(end_val, s.start_time)` and `duration_seconds` with `GREATEST(..., 0)` in both helpers and in `/sessions/end`. Defense-in-depth in `reports.js` (`/shift-attendance` + `/shift-attendance/overtime`): floor each per-row `duration_seconds` at 0 so legacy negative rows can't corrupt dashboard display.
+
+**Files:** `admin-dashboard/api/routes/sessions.js` (L11-26, L37-55, L122-155), `admin-dashboard/api/routes/reports.js` (shift + overtime per-session loops).
+
+**One-time cleanup (run manually with user approval):**
+```sql
+SELECT id, start_time, end_time, duration_seconds FROM sessions WHERE end_time < start_time;
+-- Review, then:
+UPDATE sessions SET end_time = start_time, duration_seconds = 0 WHERE end_time < start_time;
+```
+
+### BUG-02 — Application = "Unknown" in activity logs despite active Chrome/VS Code
+
+**Root cause:** `desktop-app/main.js` active-window PowerShell script reads `$proc.MainModule.FileVersionInfo` for a friendly display name. On sandboxed Chrome renderer / VS Code helper processes, this hangs past the 5-second Node `exec` timeout — losing the entire foreground window including the reliably-available ProcessName.
+
+**Fix:**
+- Added display-name hashtable in the PS script. Known hazardous processes (chrome, firefox, msedge, code, cursor, slack, teams, etc.) skip `MainModule` entirely and use the map.
+- Raised Node exec timeout from 5 s to 8 s.
+- On timeout, attempt to salvage partial JSON from stdout before surrendering to "Unknown".
+- Explicit `[activeWin] PowerShell timeout after 8s` logging so silent fails are visible.
+
+**Files:** `desktop-app/main.js` L1943-2005 (PS script), L2099-2165 (Node exec wrapper).
+
+### BUG-03 — Extra Hours 0h 0m / status "Logged Out" post-shift (Himanshu Sharma, 1–7 PM shift)
+
+**Likely root cause (H1):** team's `track_outside_hours` is `false`, so at 7 PM the desktop correctly calls `pauseTrackingForLogout()` and stops all tracking. Symptoms match expected behavior when the team feature is off.
+
+**Diagnostic SQL** (run before concluding code fix needed):
+```sql
+-- Team setting
+SELECT u.name, tms.working_hours_start, tms.working_hours_end, tms.track_outside_hours
+FROM users u LEFT JOIN team_monitoring_settings tms ON tms.team_id = u.team_id
+WHERE u.name ILIKE '%Himanshu%';
+
+-- Column exists?
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'sessions' AND column_name = 'overtime';
+
+-- Any overtime sessions or post-shift activity on the reported day?
+SELECT id, start_time, end_time, is_active, overtime FROM sessions
+WHERE user_id = (SELECT id FROM users WHERE name ILIKE '%Himanshu%')
+  AND start_time >= '2026-04-20' ORDER BY start_time;
+SELECT COUNT(*), SUM(CASE WHEN is_overtime THEN 1 ELSE 0 END) AS ot_count
+FROM activity_logs WHERE user_id = (SELECT id FROM users WHERE name ILIKE '%Himanshu%')
+  AND timestamp >= '2026-04-20 19:00' AND timestamp < '2026-04-21 00:00';
+```
+
+**Defensive code fix (always safe):** `transitionToOvertime` in `desktop-app/main.js` now sets `currentSessionIsOvertime = true` **before** awaiting `endWorkSession()`. Closes a ~1 s window where an in-flight heartbeat/reconciliation could observe the stale regular flag.
+
+**Files:** `desktop-app/main.js` L1781-1792.
+
+**If diagnostic shows H3 (migration not applied):** run `admin-dashboard/supabase/migrations/003_overtime_support.sql`.
+
+**If diagnostic shows H1 (team setting off):** enable "Allow tracking outside working hours" in Teams settings for the team.
+
+### Regression Checklist
+- [ ] `SELECT COUNT(*) FROM sessions WHERE end_time < start_time;` = 0 after cleanup
+- [ ] Sleep/wake mid-session: no negative-duration rows
+- [ ] Switch-user (Windows): no negative-duration rows
+- [ ] Chrome + VS Code + Firefox + Explorer all resolve to correct `application_name` for 30+ consecutive ticks
+- [ ] `application_name='Unknown'` share < 1% in fresh activity (`SELECT application_name, COUNT(*) FROM activity_logs WHERE timestamp > NOW() - INTERVAL '1 hour' GROUP BY 1`)
+- [ ] Shift-boundary crossover (run test team with shift ending in next 5 min): regular session closes at boundary, overtime session opens, no negative durations, both blocks render
+- [ ] Bump `desktop-app/package.json` patch version before rebuild (per `feedback_version_bump.md`)
+
+---
+
 ## 2026-04-18 — Overtime / Extra Hours mode + activity-based "Online" status
 
 End-to-end implementation of the spec captured in `~/.claude/plans/make-the-changes-as-fluttering-sketch.md`. Solves two problems:

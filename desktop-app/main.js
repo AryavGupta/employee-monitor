@@ -1778,12 +1778,15 @@ async function pauseTrackingForLogout() {
 // signal so the dashboard shows the shift-end transition, then open a new
 // overtime session. Tracking intervals (screenshot/activity/heartbeat) keep
 // running — only the session row changes.
+// Flag is set FIRST so any in-flight heartbeat/reconciliation during
+// endWorkSession observes overtime=true and doesn't tag data as regular.
+// See BUG-2026-04-21-03.
 async function transitionToOvertime() {
+  currentSessionIsOvertime = true;
   await endWorkSession();
   await pushLoggedOutSignal();
   // The reconciliation tick will retry if startWorkSession fails — fire-and-forget
   // so the dashboard's logged_out state isn't gated on session-create latency.
-  currentSessionIsOvertime = true;
   startWorkSession({ overtime: true }).catch(err =>
     console.error('Overtime session start failed:', err?.message)
   );
@@ -1942,22 +1945,63 @@ $processId = [uint32]0
 
 $pName = 'Unknown'
 $displayName = $null
+
+# Known-name display map. MainModule.FileVersionInfo is unreliable on sandboxed
+# child processes (Chrome renderer, VS Code helper, etc.) — access throws or
+# HANGS past our Node-side timeout, losing the whole foreground window
+# including fields we already have. Shortcut to a static display name for
+# these and skip MainModule entirely. See BUG-2026-04-21-02.
+$displayMap = @{
+    'chrome'   = 'Google Chrome'
+    'msedge'   = 'Microsoft Edge'
+    'firefox'  = 'Mozilla Firefox'
+    'brave'    = 'Brave'
+    'opera'    = 'Opera'
+    'vivaldi'  = 'Vivaldi'
+    'code'     = 'Visual Studio Code'
+    'code - insiders' = 'Visual Studio Code Insiders'
+    'cursor'   = 'Cursor'
+    'devenv'   = 'Visual Studio'
+    'idea64'   = 'IntelliJ IDEA'
+    'webstorm64' = 'WebStorm'
+    'pycharm64' = 'PyCharm'
+    'slack'    = 'Slack'
+    'teams'    = 'Microsoft Teams'
+    'discord'  = 'Discord'
+    'zoom'     = 'Zoom'
+    'notion'   = 'Notion'
+    'explorer' = 'File Explorer'
+    'notepad'  = 'Notepad'
+    'notepad++' = 'Notepad++'
+    'excel'    = 'Microsoft Excel'
+    'winword'  = 'Microsoft Word'
+    'powerpnt' = 'Microsoft PowerPoint'
+    'outlook'  = 'Microsoft Outlook'
+}
+
 try {
     # GetProcessById is lighter than Get-Process and doesn't depend on provider modules.
     $proc = [System.Diagnostics.Process]::GetProcessById([int]$processId)
     if ($proc) {
         $pName = $proc.ProcessName
-        # Prefer the friendly product name from the binary metadata. Wrapped in a
-        # separate try because MainModule throws Access Denied on sandboxed children
-        # (some Chrome/Firefox renderer processes) even when ProcessName is readable.
-        try {
-            $fvi = $proc.MainModule.FileVersionInfo
-            if ($fvi) {
-                if ($fvi.ProductName -and $fvi.ProductName.Trim()) { $displayName = $fvi.ProductName.Trim() }
-                elseif ($fvi.FileDescription -and $fvi.FileDescription.Trim()) { $displayName = $fvi.FileDescription.Trim() }
+        $pNameLower = $pName.ToLowerInvariant()
+        if ($displayMap.ContainsKey($pNameLower)) {
+            # Hot path: known process. Skip MainModule entirely.
+            $displayName = $displayMap[$pNameLower]
+        } else {
+            # Unknown process: best-effort MainModule lookup. Access-denied/hang
+            # risk is low for typical desktop apps; if it throws we fall back to
+            # ProcessName below. Wrapped in try so a slow native call can't abort
+            # the whole script.
+            try {
+                $fvi = $proc.MainModule.FileVersionInfo
+                if ($fvi) {
+                    if ($fvi.ProductName -and $fvi.ProductName.Trim()) { $displayName = $fvi.ProductName.Trim() }
+                    elseif ($fvi.FileDescription -and $fvi.FileDescription.Trim()) { $displayName = $fvi.FileDescription.Trim() }
+                }
+            } catch {
+                [Console]::Error.WriteLine("MainModule access denied for pid $processId ($pName): $_")
             }
-        } catch {
-            [Console]::Error.WriteLine("MainModule access denied for pid $processId ($pName): $_")
         }
     }
 } catch {
@@ -2101,13 +2145,46 @@ async function trackActiveApplication() {
       //             contaminate stdout (the original Firefox=Unknown root cause).
       // -NonInteractive: never prompt.
       // windowsHide: no flashing console window each invocation.
+      // timeout 8 s (was 5 s): MainModule access on slow/sandboxed processes can
+      // take a few seconds under load. 8 s keeps us well under the 10 s activity
+      // loop interval. See BUG-2026-04-21-02.
+      const parsePayload = (raw) => {
+        const firstBrace = raw.indexOf('{');
+        const lastBrace = raw.lastIndexOf('}');
+        const jsonSlice = firstBrace >= 0 && lastBrace > firstBrace
+          ? raw.slice(firstBrace, lastBrace + 1)
+          : raw;
+        return JSON.parse(jsonSlice);
+      };
       exec(
         `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${activeWindowScriptPath}"`,
-        { timeout: 5000, windowsHide: true, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+        { timeout: 8000, windowsHide: true, encoding: 'utf8', maxBuffer: 1024 * 1024 },
         (error, stdout, stderr) => {
+          // On timeout, stdout may still contain a valid JSON payload emitted
+          // before the hang. Try to salvage it before surrendering to Unknown.
           if (error) {
-            console.warn('[activeWin] PowerShell exec error:', error.message);
+            const isTimeout = error.killed && error.signal === 'SIGTERM';
+            if (isTimeout) {
+              console.warn(`[activeWin] PowerShell timeout after 8s (killed:${error.killed}, signal:${error.signal})`);
+            } else {
+              console.warn('[activeWin] PowerShell exec error:', error.message);
+            }
             if (stderr && stderr.trim()) console.warn('[activeWin] stderr:', stderr.trim().slice(0, 500));
+            const raw = (stdout || '').trim();
+            if (isTimeout && raw) {
+              try {
+                const salvaged = parsePayload(raw);
+                console.warn('[activeWin] salvaged partial JSON on timeout:', salvaged.ProcessName);
+                resolve({
+                  appName: salvaged.DisplayName || salvaged.ProcessName || 'Unknown',
+                  processName: (salvaged.ProcessName || 'unknown').toString().toLowerCase(),
+                  windowTitle: salvaged.Title || '',
+                  filePath: salvaged.FilePath || null,
+                  hwnd: typeof salvaged.HWND === 'number' ? salvaged.HWND : null
+                });
+                return;
+              } catch (e) { /* fall through to Unknown */ }
+            }
             resolve({ appName: 'Unknown', processName: 'unknown', windowTitle: 'Unknown', filePath: null, hwnd: null });
             return;
           }
@@ -2116,12 +2193,7 @@ async function trackActiveApplication() {
             // environment still contaminates stdout somehow, pull out the first
             // balanced {...} so one bad line from a module load doesn't break us.
             const raw = (stdout || '').trim();
-            const firstBrace = raw.indexOf('{');
-            const lastBrace = raw.lastIndexOf('}');
-            const jsonSlice = firstBrace >= 0 && lastBrace > firstBrace
-              ? raw.slice(firstBrace, lastBrace + 1)
-              : raw;
-            const result = JSON.parse(jsonSlice);
+            const result = parsePayload(raw);
             if (stderr && stderr.trim()) {
               console.warn('[activeWin] stderr (non-fatal):', stderr.trim().slice(0, 500));
             }
