@@ -25,7 +25,7 @@ function Teams({ user, onLogout }) {
   // (that would persist after closing Edit without saving, then opening Create).
   const emptyFormData = {
     name: '', description: '', manager_id: '',
-    screenshot_interval: '', activity_interval: '', idle_threshold: '',
+    screenshot_interval: 60, activity_interval: 10, idle_threshold: 300,
     track_urls: true, track_applications: true, track_keyboard_mouse: true,
     working_hours_start: '09:00', working_hours_end: '17:00', track_outside_hours: true
   };
