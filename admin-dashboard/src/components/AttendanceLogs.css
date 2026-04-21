@@ -168,15 +168,15 @@
 .al-shift-time { font-size: 13px; color: #94a3b8; }
 
 /* Extra Hours / Overtime block — sits below the regular shift summary, visually
-   distinguished with a soft warm tint and dashed top border so admins can scan
+   distinguished with a soft purple tint and dashed top border so admins can scan
    the page and immediately see post-shift work as a separate bucket. */
 .al-overtime-block {
   margin-top: 24px;
   padding-top: 20px;
-  border-top: 2px dashed #fde68a;
+  border-top: 2px dashed #c4b5fd;
 }
-.al-overtime-block .al-shift-header h3 { color: #b45309; }
-.al-overtime-block .al-stat { background: #fffbeb; border-color: #fef3c7; }
+.al-overtime-block .al-shift-header h3 { color: #5b21b6; }
+.al-overtime-block .al-stat { background: #f5f3ff; border-color: #ede9fe; }
 
 /* Stats Grid */
 .al-stats-grid {
@@ -209,7 +209,7 @@
 
 /* Pastel tile variants — match Pencil design. Each tile has a subtle tint
    so the 5-in-a-row strip reads at a glance. Overtime block overrides
-   .al-stat above with a unified amber tint, so these tints only apply
+   .al-stat above with a unified purple tint, so these tints only apply
    to the regular shift block. */
 .al-stat--login { background: #eff6ff; border-color: #dbeafe; }
 .al-stat--login .al-stat-value { color: #1d4ed8; }
@@ -222,10 +222,10 @@
 .al-stat--idle { background: #fffbeb; border-color: #fef3c7; }
 .al-stat--idle .al-stat-value { color: #b45309; }
 
-/* Overtime block: keep the unified amber wash, but still tint LOGIN/LOGOUT
-   individually so users can tell columns apart. */
-.al-overtime-block .al-stat--login { background: #fff7ed; border-color: #ffedd5; }
-.al-overtime-block .al-stat--logout { background: #fff7ed; border-color: #ffedd5; }
+/* Overtime block: use indigo-tinted variants for LOGIN/LOGOUT
+   so users can tell columns apart within the purple theme. */
+.al-overtime-block .al-stat--login { background: #eef2ff; border-color: #e0e7ff; }
+.al-overtime-block .al-stat--logout { background: #eef2ff; border-color: #e0e7ff; }
 
 /* Sessions */
 .al-sessions { margin-top: 16px; }
