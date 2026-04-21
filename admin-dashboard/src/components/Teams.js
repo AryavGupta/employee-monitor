@@ -19,15 +19,15 @@ function Teams({ user, onLogout }) {
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [editingTeam, setEditingTeam] = useState(null);
   useBodyScrollLock(showCreateModal || showAddMemberModal || !!editingTeam);
-  // Truly empty Create form — the admin explicitly fills what they want.
-  // Server applies its schema defaults for anything omitted from the settings PUT.
-  // Don't inherit values from a previous Edit (that would persist after closing
-  // Edit without saving, then opening Create).
+  // Create form defaults: text fields empty (admin fills per-team), numeric
+  // intervals empty (server applies schema defaults), tracking checkboxes all
+  // on, standard 9-5 working hours. Don't inherit values from a previous Edit
+  // (that would persist after closing Edit without saving, then opening Create).
   const emptyFormData = {
     name: '', description: '', manager_id: '',
     screenshot_interval: '', activity_interval: '', idle_threshold: '',
-    track_urls: false, track_applications: false, track_keyboard_mouse: false,
-    working_hours_start: '', working_hours_end: '', track_outside_hours: false
+    track_urls: true, track_applications: true, track_keyboard_mouse: true,
+    working_hours_start: '09:00', working_hours_end: '17:00', track_outside_hours: true
   };
   const [formData, setFormData] = useState(emptyFormData);
   const [teamSearch, setTeamSearch] = useState('');
