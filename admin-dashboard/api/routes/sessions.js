@@ -118,47 +118,75 @@ router.post('/end', authenticateToken, async (req, res) => {
       ? { sql: `WHERE id = $1 AND user_id = $2 AND is_active = true`, params: [sessionId, userId] }
       : { sql: `WHERE user_id = $1 AND is_active = true`, params: [userId] };
 
-    // Data-integrity floor: end_time must be >= start_time and duration >= 0.
-    // CURRENT_TIMESTAMP is normally ahead of start_time, but the GREATEST guards
-    // are cheap insurance against clock skew and mirror the stale-close helpers.
-    // See BUG-2026-04-21-01.
+    // Data-integrity floors:
+    //   end_time: use evidence-of-life (LEAST of last-activity/screenshot/heartbeat
+    //     capped at CURRENT_TIMESTAMP), floored at start_time. Must NOT be blind
+    //     CURRENT_TIMESTAMP — see BUG-2026-04-21-06: when endWorkSession is called
+    //     late (suspend-timeout fallback running at wake 16 h later), CURRENT_TIMESTAMP
+    //     = wake time, and the displayed "Logout" inflates by the full sleep duration.
+    //     Client-reported duration_seconds still wins for totals; end_time mirrors
+    //     the stale-close logic so any close path produces the same Logout display.
+    //   duration_seconds: >= 0. Client total wins when provided.
+    // See BUG-2026-04-21-01, BUG-2026-04-21-06.
+    const endTimeExpr = `GREATEST(
+      LEAST(
+        CURRENT_TIMESTAMP,
+        COALESCE(
+          GREATEST(
+            (SELECT MAX(timestamp) FROM activity_logs
+              WHERE user_id = s.user_id AND timestamp >= s.start_time),
+            (SELECT MAX(captured_at) FROM screenshots
+              WHERE user_id = s.user_id AND captured_at >= s.start_time),
+            (SELECT last_heartbeat FROM user_presence WHERE user_id = s.user_id)
+          ),
+          CURRENT_TIMESTAMP
+        )
+      ),
+      s.start_time
+    )`;
+    // targetClause uses table alias-less "id = $N", but our end_time expression
+    // references s.user_id / s.start_time — rewrite the WHERE clause to use s.
+    const sQualifiedTarget = sessionId
+      ? { sql: `WHERE s.id = $1 AND s.user_id = $2 AND s.is_active = true`, params: [sessionId, userId] }
+      : { sql: `WHERE s.user_id = $1 AND s.is_active = true`, params: [userId] };
+
     let result;
     if (trackedDuration !== null) {
       const clampedDuration = Math.max(0, trackedDuration);
       const clampedActive = Math.max(0, totalActiveTime);
       const clampedIdle = Math.max(0, totalIdleTime);
-      const baseParams = [...targetClause.params, clampedDuration, clampedActive, clampedIdle, notes];
+      const baseParams = [...sQualifiedTarget.params, clampedDuration, clampedActive, clampedIdle, notes];
       const p = (i) => `$${i}`;
       try {
         result = await pool.query(
-          `UPDATE sessions SET
+          `UPDATE sessions s SET
              is_active = false,
-             end_time = GREATEST(CURRENT_TIMESTAMP, start_time),
-             duration_seconds = ${p(targetClause.params.length + 1)},
-             active_seconds = ${p(targetClause.params.length + 2)},
-             idle_seconds = ${p(targetClause.params.length + 3)},
-             notes = COALESCE(${p(targetClause.params.length + 4)}, notes)
-           ${targetClause.sql} RETURNING *`,
+             end_time = ${endTimeExpr},
+             duration_seconds = ${p(sQualifiedTarget.params.length + 1)},
+             active_seconds = ${p(sQualifiedTarget.params.length + 2)},
+             idle_seconds = ${p(sQualifiedTarget.params.length + 3)},
+             notes = COALESCE(${p(sQualifiedTarget.params.length + 4)}, notes)
+           ${sQualifiedTarget.sql} RETURNING *`,
           baseParams
         );
       } catch (columnError) {
         console.log('New session columns not available, using fallback:', columnError.message);
         result = await pool.query(
-          `UPDATE sessions SET
+          `UPDATE sessions s SET
              is_active = false,
-             end_time = GREATEST(CURRENT_TIMESTAMP, start_time),
-             duration_seconds = ${p(targetClause.params.length + 1)}
-           ${targetClause.sql} RETURNING *`,
-          [...targetClause.params, clampedDuration]
+             end_time = ${endTimeExpr},
+             duration_seconds = ${p(sQualifiedTarget.params.length + 1)}
+           ${sQualifiedTarget.sql} RETURNING *`,
+          [...sQualifiedTarget.params, clampedDuration]
         );
       }
     } else {
       result = await pool.query(
-        `UPDATE sessions SET is_active = false,
-           end_time = GREATEST(CURRENT_TIMESTAMP, start_time),
-           duration_seconds = GREATEST(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - start_time)), 0)
-         ${targetClause.sql} RETURNING *`,
-        targetClause.params
+        `UPDATE sessions s SET is_active = false,
+           end_time = ${endTimeExpr},
+           duration_seconds = GREATEST(EXTRACT(EPOCH FROM (${endTimeExpr} - s.start_time)), 0)
+         ${sQualifiedTarget.sql} RETURNING *`,
+        sQualifiedTarget.params
       );
     }
 

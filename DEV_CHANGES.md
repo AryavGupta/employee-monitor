@@ -4,6 +4,33 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-21 — /sessions/end end_time uses evidence-of-life (BUG-06)
+
+`POST /api/sessions/end` previously wrote `end_time = GREATEST(CURRENT_TIMESTAMP, start_time)`. Usually fine — `CURRENT_TIMESTAMP` is within seconds of the real session end when the desktop calls /end from an online, tracking state.
+
+But when `powerMonitor.on('suspend')`'s 3 s endWorkSession call times out (common — the OS gives very little I/O budget before sleep) and we retry on wake via `pauseTrackingForLogout`, `CURRENT_TIMESTAMP` is now **wake time**. For a 16-hour overnight sleep, dashboard's "Logout" time would display 9 AM instead of 5 PM the previous evening. `duration_seconds` was correct (client-reported) but `end_time` inflated.
+
+**Fix:** `/sessions/end` now uses the same evidence-of-life logic as the stale-close helpers:
+
+```sql
+end_time = GREATEST(
+  LEAST(CURRENT_TIMESTAMP, COALESCE(GREATEST(
+    MAX(activity_logs.timestamp), MAX(screenshots.captured_at), user_presence.last_heartbeat
+  ), CURRENT_TIMESTAMP)),
+  s.start_time
+)
+```
+
+Any close path (normal, suspend-then-wake-retry, stale cleanup) now produces the same Logout display regardless of when the endpoint actually fires.
+
+File: `admin-dashboard/api/routes/sessions.js` (`/sessions/end`).
+
+**Validation:**
+- Simulate: manually INSERT a session with start_time 24h ago, no heartbeat since, then POST /sessions/end → end_time should equal start_time (no evidence of life), NOT NOW.
+- Real-world: put laptop to sleep during shift, wake 12+ hours later → Logout displays last evidence-of-life minute (within seconds of actual sleep time), not wake time.
+
+---
+
 ## 2026-04-21 — Night-shift overtime window fix (follow-up to BUG-04)
 
 The initial BUG-04 fix only handled non-night shifts correctly. For night shifts (start > end, e.g. 23:00-07:00) the code still computed `overtime_end = shift_end + 24h`, which overlaps the NEXT night shift (which runs 23:00 the same day as the current shift's end, through to 07:00 the following day). Same bleed as before — tomorrow night's regular activity could count as today's overtime evidence.
