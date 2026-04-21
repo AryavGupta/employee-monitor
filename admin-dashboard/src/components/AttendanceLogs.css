@@ -207,6 +207,26 @@
 .al-stat-value.active { color: #15803d; }
 .al-stat-value.idle { color: #b45309; }
 
+/* Pastel tile variants — match Pencil design. Each tile has a subtle tint
+   so the 5-in-a-row strip reads at a glance. Overtime block overrides
+   .al-stat above with a unified amber tint, so these tints only apply
+   to the regular shift block. */
+.al-stat--login { background: #eff6ff; border-color: #dbeafe; }
+.al-stat--login .al-stat-value { color: #1d4ed8; }
+.al-stat--logout { background: #f0fdf4; border-color: #dcfce7; }
+.al-stat--logout .al-stat-value { color: #15803d; }
+.al-stat--total { background: #f5f3ff; border-color: #ede9fe; }
+.al-stat--total .al-stat-value { color: #6d28d9; }
+.al-stat--active { background: #ecfdf5; border-color: #d1fae5; }
+.al-stat--active .al-stat-value { color: #059669; }
+.al-stat--idle { background: #fffbeb; border-color: #fef3c7; }
+.al-stat--idle .al-stat-value { color: #b45309; }
+
+/* Overtime block: keep the unified amber wash, but still tint LOGIN/LOGOUT
+   individually so users can tell columns apart. */
+.al-overtime-block .al-stat--login { background: #fff7ed; border-color: #ffedd5; }
+.al-overtime-block .al-stat--logout { background: #fff7ed; border-color: #ffedd5; }
+
 /* Sessions */
 .al-sessions { margin-top: 16px; }
 .al-sessions h4 { margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #475569; }

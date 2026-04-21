@@ -444,7 +444,7 @@ function Analytics({ user, onLogout }) {
               </div>
 
               <div className="action-buttons">
-                <button className="refresh-btn" onClick={fetchAnalytics} disabled={loading}>
+                <button className="btn-refresh" onClick={fetchAnalytics} disabled={loading}>
                   <Icons.Refresh />
                   {loading ? 'Loading...' : 'Refresh'}
                 </button>

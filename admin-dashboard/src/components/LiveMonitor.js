@@ -158,7 +158,8 @@ function LiveMonitor({ user, onLogout }) {
               <option value="30">30 sec</option>
               <option value="60">1 min</option>
             </select>
-            <button className="refresh-btn" onClick={fetchData}>
+            <button className="btn-refresh" onClick={fetchData}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
               Refresh Now
             </button>
           </div>

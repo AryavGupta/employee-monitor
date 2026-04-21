@@ -871,3 +871,56 @@ h1, h2, h3, h4 {
     grid-template-columns: 1fr;
   }
 }
+
+/* ============================================
+   UNIFIED REFRESH BUTTON
+   Used across Dashboard / UserActivity / AttendanceLogs /
+   Screenshots / Analytics / LiveMonitor / Teams.
+   Icon + "Refresh" label in a neutral outline pill.
+   Matches the Pencil design system.
+   ============================================ */
+
+.btn-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.btn-refresh:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+.btn-refresh:active:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.btn-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-refresh svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+}
+
+/* Compact variant — icon-only, used inside section headers */
+.btn-refresh.btn-refresh-sm {
+  padding: 6px 8px;
+  gap: 0;
+}

@@ -379,8 +379,9 @@ function AttendanceLogs({ user, onLogout }) {
             <div className="al-section">
               <div className="al-section-header">
                 <h3>Shift Attendance</h3>
-                <button className="al-refresh-btn al-refresh-btn-sm" onClick={fetchShiftAttendance} disabled={shiftLoading}>
-                  {shiftLoading ? '...' : '↻'}
+                <button className="btn-refresh" onClick={fetchShiftAttendance} disabled={shiftLoading}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                  {shiftLoading ? 'Loading...' : 'Refresh'}
                 </button>
                 <button className="al-export-btn" onClick={exportShiftCSV}
                   disabled={exportingShift || !shiftData?.summary?.session_count}>
@@ -398,7 +399,19 @@ function AttendanceLogs({ user, onLogout }) {
               </div>
 
               <div className="al-shift-date">
-                {format(new Date(shiftDate + 'T00:00:00'), 'EEEE, MMMM dd, yyyy')}
+                {(() => {
+                  // "Today, April 21, 2026" / "Yesterday, ..." / full day name otherwise.
+                  // Matches the contextual label in the Pencil design.
+                  const shift = new Date(shiftDate + 'T00:00:00');
+                  const today = new Date(); today.setHours(0,0,0,0);
+                  const diffDays = Math.round((shift - today) / 86400000);
+                  let prefix;
+                  if (diffDays === 0) prefix = 'Today';
+                  else if (diffDays === -1) prefix = 'Yesterday';
+                  else if (diffDays === 1) prefix = 'Tomorrow';
+                  else prefix = format(shift, 'EEEE');
+                  return `${prefix}, ${format(shift, 'MMMM dd, yyyy')}`;
+                })()}
                 {shiftData?.shift && (
                   <span className={`al-badge ${shiftData.shift.is_night_shift ? 'night' : 'day'}`}>
                     {shiftData.shift.label}
@@ -414,33 +427,33 @@ function AttendanceLogs({ user, onLogout }) {
               ) : shiftData?.summary?.session_count > 0 || shiftData?.summary?.activity_count > 0 ? (
                 <>
                   <div className="al-stats-grid">
-                    <div className="al-stat">
+                    <div className="al-stat al-stat--login">
                       <div className="al-stat-label">Login</div>
                       <div className="al-stat-value">
                         {shiftData.summary.first_login ? format(new Date(shiftData.summary.first_login), 'hh:mm a') : '--'}
                       </div>
                     </div>
-                    <div className="al-stat">
+                    <div className="al-stat al-stat--logout">
                       <div className="al-stat-label">Logout</div>
                       <div className="al-stat-value">
                         {shiftData.summary.is_active ? 'Active' : shiftData.summary.last_logout ? format(new Date(shiftData.summary.last_logout), 'hh:mm a') : '--'}
                       </div>
                     </div>
-                    <div className="al-stat">
+                    <div className="al-stat al-stat--total">
                       <div className="al-stat-label">Total Hours</div>
                       <div className="al-stat-value">{formatDuration(shiftData.summary.total_seconds)}</div>
                     </div>
-                    <div className="al-stat">
+                    <div className="al-stat al-stat--active">
                       <div className="al-stat-label">Active Time</div>
-                      <div className="al-stat-value active">{formatDuration(shiftData.summary.active_seconds)}</div>
+                      <div className="al-stat-value">{formatDuration(shiftData.summary.active_seconds)}</div>
                     </div>
-                    <div className="al-stat">
+                    <div className="al-stat al-stat--idle">
                       <div className="al-stat-label">Idle Time</div>
-                      <div className="al-stat-value idle">{formatDuration(shiftData.summary.idle_seconds)}</div>
+                      <div className="al-stat-value">{formatDuration(shiftData.summary.idle_seconds)}</div>
                     </div>
                   </div>
 
-                  {shiftData.sessions.length > 1 && (
+                  {shiftData.sessions.length > 0 && (
                     <div className="al-sessions">
                       <h4>Sessions ({shiftData.sessions.length})</h4>
                       <div className={shiftData.sessions.length > 4 ? 'al-sessions-scroll' : ''}>
@@ -478,33 +491,33 @@ function AttendanceLogs({ user, onLogout }) {
                     <span className="al-shift-label">Post-shift tracking</span>
                   </div>
                   <div className="al-stats-grid">
-                    <div className="al-stat">
+                    <div className="al-stat al-stat--login">
                       <div className="al-stat-label">Login</div>
                       <div className="al-stat-value">
                         {overtimeData.summary.first_login ? format(new Date(overtimeData.summary.first_login), 'hh:mm a') : '--'}
                       </div>
                     </div>
-                    <div className="al-stat">
+                    <div className="al-stat al-stat--logout">
                       <div className="al-stat-label">Logout</div>
                       <div className="al-stat-value">
                         {overtimeData.summary.is_active ? 'Active' : overtimeData.summary.last_logout ? format(new Date(overtimeData.summary.last_logout), 'hh:mm a') : '--'}
                       </div>
                     </div>
-                    <div className="al-stat">
+                    <div className="al-stat al-stat--total">
                       <div className="al-stat-label">Total Hours</div>
                       <div className="al-stat-value">{formatDuration(overtimeData.summary.total_seconds)}</div>
                     </div>
-                    <div className="al-stat">
+                    <div className="al-stat al-stat--active">
                       <div className="al-stat-label">Active Time</div>
-                      <div className="al-stat-value active">{formatDuration(overtimeData.summary.active_seconds)}</div>
+                      <div className="al-stat-value">{formatDuration(overtimeData.summary.active_seconds)}</div>
                     </div>
-                    <div className="al-stat">
+                    <div className="al-stat al-stat--idle">
                       <div className="al-stat-label">Idle Time</div>
-                      <div className="al-stat-value idle">{formatDuration(overtimeData.summary.idle_seconds)}</div>
+                      <div className="al-stat-value">{formatDuration(overtimeData.summary.idle_seconds)}</div>
                     </div>
                   </div>
 
-                  {overtimeData.sessions?.length > 1 && (
+                  {overtimeData.sessions?.length > 0 && (
                     <div className="al-sessions">
                       <h4>Sessions ({overtimeData.sessions.length})</h4>
                       <div className={overtimeData.sessions.length > 4 ? 'al-sessions-scroll' : ''}>
@@ -568,7 +581,8 @@ function AttendanceLogs({ user, onLogout }) {
                     <option value="idle">Idle</option>
                   </select>
                 </div>
-                <button className="al-refresh-btn" onClick={() => { setLogOffset(0); fetchActivityLogs(0); }} disabled={activityLogLoading}>
+                <button className="btn-refresh" onClick={() => { setLogOffset(0); fetchActivityLogs(0); }} disabled={activityLogLoading}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                   {activityLogLoading ? 'Loading...' : 'Refresh'}
                 </button>
                 <button className="al-export-btn" onClick={exportCSV} disabled={exporting || activityLog.length === 0}>
