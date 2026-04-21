@@ -4,6 +4,36 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-21 — Classification + wake-handler fixes (BUG-04 / BUG-05)
+
+### BUG-04 — In-shift session classified as Extra Hours (Aryav)
+
+**Root cause:** `/shift-attendance/overtime` computed `overtime_end = shift_end + 24h`, which for non-night shifts **extends past the next shift start**. For Aryav (11:00-20:00), the overtime window for shiftDate=2026-04-20 ran [2026-04-20 20:00 IST, 2026-04-21 20:00 IST] — swallowing his entire next-day regular shift. On top of that, the `evidenceFirst/Last` queries included **screenshots without an `is_overtime` filter**, so today's regular-shift screenshots showed up as yesterday's overtime "Login: 12:39 PM" even though activity was correctly tagged `is_overtime=false`.
+
+**Fix:** `admin-dashboard/api/routes/reports.js` `/shift-attendance/overtime`
+- Overtime window `end` now caps at the next-day shift start (for non-night shifts), not +24h.
+- Evidence-of-life screenshot subqueries now require a matching overtime=true activity row within ±2 minutes of the screenshot — so regular-shift screenshots that happen to fall inside the overtime window can't masquerade as overtime evidence.
+
+### BUG-05 — Wake-handler bypasses working-hours policy (Harsh Pathak)
+
+**Root cause:** `desktop-app/main.js` `powerMonitor.on('resume')`
+1. When woken outside hours, called `startHeartbeat()` unconditionally — kept heartbeat flowing even on teams with `track_outside_hours=false`, keeping the user shown as "idle" on the dashboard instead of "logged_out" (the Neeraj-2pm regression).
+2. When woken inside hours, directly set `screenshotInterval/activityInterval/heartbeatInterval` and called `startWorkSession()` with **no overtime flag**, bypassing `shouldTrackNow()`, `currentSessionIsOvertime`, and `CONFIG.TRACK_OUTSIDE_HOURS` — so a shift-end crossed during sleep produced a regular-tagged session in the overtime window.
+
+**Fix:**
+- Rewrote the resume handler to re-derive state from working-hours policy. Now calls `pauseTrackingForLogout()` (if previously tracking) then `startTrackingNow({ overtime })` with the correct flag, or stays fully paused (no heartbeat) when outside hours and overtime disabled.
+- Added `if (!isTracking) return;` belt-and-suspenders gates at the top of `captureScreenshot`, `trackActivity`, `sendHeartbeat`. A leaked interval can no longer produce ghost rows / false-online status.
+
+**Files:** `admin-dashboard/api/routes/reports.js` (overtime window + evidence queries); `desktop-app/main.js` (resume handler, 3 internal gates).
+
+**Validation:**
+- Regression SQL after deploy: `SELECT COUNT(*) FROM activity_logs WHERE user_id=<user> AND is_overtime=true AND timestamp > NOW() - INTERVAL '2h'` — should be zero inside the user's regular shift window.
+- Put laptop to sleep 15 min before shift end, wake 15 min after shift end on a team with `track_outside_hours=false`. Dashboard status should flip to "Logged Out" within 90 s; no new session row should be created; screenshots should stop at shift end.
+- Wake during shift with `track_outside_hours=true` on the far side of a boundary: new session should be tagged `overtime=true` / `overtime=false` consistently with the wake-time clock.
+- View an attendance date with 24h+ idle before/after: Extra Hours block should NOT display `Login: 12:39 PM` ghosts from the next day's regular shift.
+
+---
+
 ## 2026-04-21 — Three production bug fixes (BUG-2026-04-21-01/02/03)
 
 Plan: `~/.claude/plans/i-need-you-to-recursive-snail.md`. Bug registry: `~/.claude/projects/.../memory/project_bug_registry.md`.

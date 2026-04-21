@@ -705,71 +705,62 @@ function setupPowerMonitorHandlers() {
     // Reset idle tracking state since idle time resets after wake
     lastIdleTime = 0;
 
-    // Resume tracking if we were tracking before sleep
-    if (isTracking && CONFIG.USER_TOKEN) {
-      // Working-hours boundary may have crossed during sleep. If we slept inside
-      // hours and woke outside, do NOT restart tracking intervals — only
-      // heartbeat, so presence shows online but no false activity is logged.
-      // The workingHoursCheckInterval (still running, not cleared on suspend)
-      // will resume tracking when hours next open.
-      if (CONFIG.WORKING_HOURS_START && CONFIG.WORKING_HOURS_END && !shouldTrackNow()) {
-        console.log('Woke outside working hours — staying paused, heartbeat-only');
-        isTracking = false;
-        startHeartbeat();
-        sendHeartbeat();
-        if (mainWindow && mainWindow.webContents) {
-          mainWindow.webContents.send('system-wake', { sleepDuration });
-        }
-        return;
+    // Re-derive tracking state from current working-hours policy after wake.
+    // Previously this handler (a) kept heartbeat flowing when woken outside
+    // hours (making users appear idle instead of logged_out on teams with
+    // track_outside_hours=false — the Harsh-Pathak symptom), and (b) when
+    // woken inside hours, directly set intervals and called startWorkSession()
+    // with NO overtime flag or gating, producing regular-tagged sessions
+    // across an overtime boundary. See BUG-2026-04-21-05.
+    //
+    // New flow: delegate to the same entry points checkWorkingHoursAndToggle
+    // uses. Each has its own guards against double-start / double-stop:
+    //   - startTrackingNow({ overtime }) — only starts if !isTracking
+    //   - pauseTrackingForLogout()       — only runs if isTracking
+    // We always want a fresh session on wake (in case suspend-end failed), so
+    // if we're already "tracking" pause first to clear state, then restart
+    // via the correct policy-aware entry point.
+    if (CONFIG.USER_TOKEN) {
+      const wasTracking = isTracking;
+      const hasHours = !!(CONFIG.WORKING_HOURS_START && CONFIG.WORKING_HOURS_END);
+      const shouldTrack = hasHours ? shouldTrackNow() : true;
+      const useOvertime = hasHours && !shouldTrack && CONFIG.TRACK_OUTSIDE_HOURS;
+      const wantTracking = shouldTrack || useOvertime;
+
+      if (wasTracking) {
+        // Close the old session cleanly so a fresh one opens with accurate
+        // overtime flag. pauseTrackingForLogout ends the session + stops all
+        // intervals + pushes logged_out. If wantTracking, we immediately
+        // restart below.
+        try { await pauseTrackingForLogout(); } catch (e) { console.error('wake pause failed:', e.message); }
       }
 
-      console.log('Resuming tracking after wake...');
-
-      // Always start a fresh session on wake. The suspend handler attempted to
-      // end the previous one, and /sessions/start closes any leftover active
-      // row for this user before creating the new one (closeStaleSessionsForUser).
-      // This guarantees the 11:41-AM-yesterday-to-now-morning inflation can't
-      // happen even if suspend/end failed to reach the server.
-      try {
-        currentSessionId = null;
-        totalActiveSeconds = 0;
-        totalIdleSeconds = 0;
-        // Fire-and-forget per Phase 2 — don't await, intervals must start
-        // regardless of session-create success.
-        startWorkSession().catch(err => console.error('startWorkSession after wake threw:', err?.message));
-      } catch (e) {
-        console.error('Failed to start new session after wake:', e.message);
+      if (wantTracking) {
+        console.log(`Resuming tracking after wake (overtime=${useOvertime})`);
+        try { startKeyboardMonitor(); } catch (e) { /* non-critical */ }
+        await startTrackingNow({ overtime: useOvertime });
+        // Log the wake event so audit trail shows the gap.
+        activityBuffer.push({
+          activityType: 'system_wake',
+          applicationName: 'System',
+          windowTitle: 'Resumed from sleep',
+          isIdle: false,
+          durationSeconds: 0,
+          keyboardEvents: 0,
+          mouseEvents: 0,
+          mouseDistance: 0,
+          metadata: { sleepDurationSeconds: sleepDuration, timestamp: new Date().toISOString() }
+        });
+      } else {
+        // Woke outside hours on a team with track_outside_hours=false. Stay
+        // fully paused — no heartbeat. The workingHoursCheckInterval will
+        // start tracking at the next shift open. This is the Neeraj-2pm
+        // fix: heartbeat-only-while-logged-out is worse than not heartbeating,
+        // because dashboards render it as "online".
+        console.log('Woke outside hours with Extra Hours disabled — staying paused');
       }
-
-      // Restart intervals — MUST always run regardless of session check above
-      screenshotInterval = setInterval(captureScreenshot, CONFIG.SCREENSHOT_INTERVAL);
-      activityInterval = setInterval(trackActivity, CONFIG.ACTIVITY_INTERVAL);
-      heartbeatInterval = setInterval(sendHeartbeat, CONFIG.HEARTBEAT_INTERVAL);
-
-      // Restart keyboard monitor (may have died during sleep)
-      try { startKeyboardMonitor(); } catch (e) { /* non-critical */ }
-
-      // Send immediate heartbeat to mark user as online again
-      sendHeartbeat();
-
-      // Log a wake event in activity
-      activityBuffer.push({
-        activityType: 'system_wake',
-        applicationName: 'System',
-        windowTitle: 'Resumed from sleep',
-        isIdle: false,
-        durationSeconds: 0, // Don't count sleep time
-        keyboardEvents: 0,
-        mouseEvents: 0,
-        mouseDistance: 0,
-        metadata: {
-          sleepDurationSeconds: sleepDuration,
-          timestamp: new Date().toISOString()
-        }
-      });
     }
 
-    // Update UI
     if (mainWindow && mainWindow.webContents) {
       mainWindow.webContents.send('system-wake', { sleepDuration });
     }
@@ -1408,6 +1399,10 @@ async function getWindowsEdgeChromeUrl(appName, hwnd) {
 // =====================================================
 
 async function captureScreenshot() {
+  // Belt-and-suspenders gate: even if a stray setInterval leaks past a pause
+  // (BUG-2026-04-21-05 resume-handler race), don't actually capture/upload.
+  // Screenshots outside working hours on a no-overtime team are pure noise.
+  if (!isTracking) return;
   try {
     // Capture ALL displays. Previously hardcoded sources[0] which silently
     // ignored secondary monitors — managers couldn't audit dual-display setups.
@@ -2542,6 +2537,10 @@ async function trackActivity() {
     return;
   }
 
+  // Gate on policy. Prevents stray activity rows being logged during paused
+  // state (e.g. after pauseTrackingForLogout but before interval was cleared).
+  if (!isTracking) return;
+
   // Calculate duration FIRST — this must always succeed so we never lose time
   const now = Date.now();
   const durationSeconds = Math.round((now - lastActivityTime) / 1000);
@@ -2733,6 +2732,12 @@ async function sendActivityBatch() {
 // =====================================================
 
 async function sendHeartbeat() {
+  // Gate on policy: no heartbeat when paused. An "idle" heartbeat while
+  // the team has track_outside_hours=false makes the user appear online
+  // on the dashboard instead of logged_out (Harsh-Pathak symptom,
+  // BUG-2026-04-21-05). Presence staleness (>90s) is what should flip
+  // dashboard status to logged_out.
+  if (!isTracking) return;
   try {
     const appInfo = await trackActiveApplication();
     let currentUrl = null;

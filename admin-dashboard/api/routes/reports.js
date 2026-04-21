@@ -792,6 +792,7 @@ router.get('/shift-attendance/overtime', authenticateToken, async (req, res) => 
     const endMinutes = endParts[0] * 60 + endParts[1];
     const isNightShift = startMinutes > endMinutes;
 
+    const pad = n => String(n).padStart(2, '0');
     let shiftEndLocal;
     if (isNightShift) {
       const nextDay = new Date(new Date(shiftDate).getTime() + 86400000).toISOString().split('T')[0];
@@ -799,9 +800,30 @@ router.get('/shift-attendance/overtime', authenticateToken, async (req, res) => 
     } else {
       shiftEndLocal = `${shiftDate}T${whEnd.substring(0, 5)}:00`;
     }
-    // Overtime window ends 24h after shift end (covers same-day shutdown).
-    const overtimeEndLocalDate = new Date(new Date(shiftEndLocal).getTime() + 86400000);
-    const pad = n => String(n).padStart(2, '0');
+
+    // Overtime window ends at the NEXT shift start (when next shift begins, it
+    // stops being "overtime for yesterday" and becomes "regular for today").
+    // Previously capped at shift_end + 24h, which for a 9-hour shift bled the
+    // next day's regular screenshots/activity into yesterday's overtime window —
+    // causing today's 12:39 PM regular login to appear as yesterday's Extra
+    // Hours "Login" via screenshot evidence. See BUG-2026-04-21-04.
+    // For night shifts the next shift starts 24h after the current shift's
+    // start (which is before shift_end) — fall back to shift_end + 24h there.
+    const shiftEndDateObj = new Date(shiftEndLocal);
+    let overtimeEndLocalDate;
+    if (isNightShift) {
+      overtimeEndLocalDate = new Date(shiftEndDateObj.getTime() + 86400000);
+    } else {
+      // Non-night: next shift starts at shiftDate+1 @ whStart.
+      const nextDayStr = new Date(new Date(shiftDate).getTime() + 86400000).toISOString().split('T')[0];
+      const nextShiftStartLocal = `${nextDayStr}T${whStart.substring(0, 5)}:00`;
+      overtimeEndLocalDate = new Date(nextShiftStartLocal);
+      // Safety: next shift start must be after shift end. If working hours
+      // were configured oddly (start == end), fall back to +24h.
+      if (overtimeEndLocalDate <= shiftEndDateObj) {
+        overtimeEndLocalDate = new Date(shiftEndDateObj.getTime() + 86400000);
+      }
+    }
     const overtimeEndLocal =
       `${overtimeEndLocalDate.getFullYear()}-${pad(overtimeEndLocalDate.getMonth() + 1)}-${pad(overtimeEndLocalDate.getDate())}` +
       `T${pad(overtimeEndLocalDate.getHours())}:${pad(overtimeEndLocalDate.getMinutes())}:00`;
@@ -857,19 +879,38 @@ router.get('/shift-attendance/overtime', authenticateToken, async (req, res) => 
     );
 
     // 4. Evidence-of-life within the overtime window only.
+    // Screenshots: restricted to minutes that also have an overtime=true
+    // activity row. Without this gate, a screenshot from the NEXT day's
+    // regular shift (which falls inside the overtime window if that window
+    // extends past the next shift start) would be counted as overtime
+    // evidence — producing ghost "Login" entries in Extra Hours. Activity
+    // rows are already correctly tagged is_overtime by the desktop. See
+    // BUG-2026-04-21-04.
     const evidenceResult = await pool.query(
       `SELECT
          LEAST(
            (SELECT MIN(timestamp) FROM activity_logs
               WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3 AND is_overtime = true),
            (SELECT MIN(captured_at) FROM screenshots
-              WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3)
+              WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3
+                AND EXISTS (
+                  SELECT 1 FROM activity_logs a
+                  WHERE a.user_id = $1 AND a.is_overtime = true
+                    AND a.timestamp BETWEEN screenshots.captured_at - INTERVAL '2 minutes'
+                                        AND screenshots.captured_at + INTERVAL '2 minutes'
+                ))
          ) as first_evidence,
          GREATEST(
            (SELECT MAX(timestamp) FROM activity_logs
               WHERE user_id = $1 AND timestamp >= $2 AND timestamp < $3 AND is_overtime = true),
            (SELECT MAX(captured_at) FROM screenshots
-              WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3)
+              WHERE user_id = $1 AND captured_at >= $2 AND captured_at < $3
+                AND EXISTS (
+                  SELECT 1 FROM activity_logs a
+                  WHERE a.user_id = $1 AND a.is_overtime = true
+                    AND a.timestamp BETWEEN screenshots.captured_at - INTERVAL '2 minutes'
+                                        AND screenshots.captured_at + INTERVAL '2 minutes'
+                ))
          ) as last_evidence`,
       [targetUserId, overtime_start_utc, overtime_end_utc]
     );
