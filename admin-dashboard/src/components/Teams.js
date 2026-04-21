@@ -19,13 +19,17 @@ function Teams({ user, onLogout }) {
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [editingTeam, setEditingTeam] = useState(null);
   useBodyScrollLock(showCreateModal || showAddMemberModal || !!editingTeam);
-  const defaultFormData = {
+  // Truly empty Create form — the admin explicitly fills what they want.
+  // Server applies its schema defaults for anything omitted from the settings PUT.
+  // Don't inherit values from a previous Edit (that would persist after closing
+  // Edit without saving, then opening Create).
+  const emptyFormData = {
     name: '', description: '', manager_id: '',
-    screenshot_interval: 60, activity_interval: 10, idle_threshold: 300,
-    track_urls: true, track_applications: true, track_keyboard_mouse: true,
+    screenshot_interval: '', activity_interval: '', idle_threshold: '',
+    track_urls: false, track_applications: false, track_keyboard_mouse: false,
     working_hours_start: '', working_hours_end: '', track_outside_hours: false
   };
-  const [formData, setFormData] = useState(defaultFormData);
+  const [formData, setFormData] = useState(emptyFormData);
   const [teamSearch, setTeamSearch] = useState('');
   const initialLoadDone = useRef(false);
 
@@ -114,19 +118,24 @@ function Teams({ user, onLogout }) {
       }, { headers });
       if (response.data.success) {
         const teamId = response.data.data.id;
-        await axios.put(`${API_URL}/api/teams/${teamId}/settings`, {
-          screenshot_interval: formData.screenshot_interval,
-          activity_interval: formData.activity_interval,
-          idle_threshold: formData.idle_threshold,
+        // Build settings payload from ONLY the fields the admin filled. Empty
+        // numeric inputs / unset working hours are omitted so the server's
+        // schema defaults apply. Booleans are always sent (unchecked is a
+        // deliberate choice, not an unset).
+        const settingsPayload = {
           track_urls: formData.track_urls,
           track_applications: formData.track_applications,
           track_keyboard_mouse: formData.track_keyboard_mouse,
-          working_hours_start: formData.working_hours_start,
-          working_hours_end: formData.working_hours_end,
           track_outside_hours: formData.track_outside_hours
-        }, { headers });
+        };
+        if (formData.screenshot_interval !== '') settingsPayload.screenshot_interval = Number(formData.screenshot_interval);
+        if (formData.activity_interval !== '') settingsPayload.activity_interval = Number(formData.activity_interval);
+        if (formData.idle_threshold !== '') settingsPayload.idle_threshold = Number(formData.idle_threshold);
+        if (formData.working_hours_start) settingsPayload.working_hours_start = formData.working_hours_start;
+        if (formData.working_hours_end) settingsPayload.working_hours_end = formData.working_hours_end;
+        await axios.put(`${API_URL}/api/teams/${teamId}/settings`, settingsPayload, { headers });
         setShowCreateModal(false);
-        setFormData(defaultFormData);
+        setFormData(emptyFormData);
         fetchTeams();
       }
     } catch (error) {
@@ -146,20 +155,25 @@ function Teams({ user, onLogout }) {
           description: formData.description,
           manager_id: formData.manager_id || null
         }, { headers }),
-        axios.put(`${API_URL}/api/teams/${teamId}/settings`, {
-          screenshot_interval: formData.screenshot_interval,
-          activity_interval: formData.activity_interval,
-          idle_threshold: formData.idle_threshold,
-          track_urls: formData.track_urls,
-          track_applications: formData.track_applications,
-          track_keyboard_mouse: formData.track_keyboard_mouse,
-          working_hours_start: formData.working_hours_start,
-          working_hours_end: formData.working_hours_end,
-          track_outside_hours: formData.track_outside_hours
-        }, { headers })
+        axios.put(`${API_URL}/api/teams/${teamId}/settings`, (() => {
+          // Mirror Create: omit fields the admin cleared so the server keeps
+          // its previous value or applies its schema default.
+          const p = {
+            track_urls: formData.track_urls,
+            track_applications: formData.track_applications,
+            track_keyboard_mouse: formData.track_keyboard_mouse,
+            track_outside_hours: formData.track_outside_hours
+          };
+          if (formData.screenshot_interval !== '') p.screenshot_interval = Number(formData.screenshot_interval);
+          if (formData.activity_interval !== '') p.activity_interval = Number(formData.activity_interval);
+          if (formData.idle_threshold !== '') p.idle_threshold = Number(formData.idle_threshold);
+          if (formData.working_hours_start) p.working_hours_start = formData.working_hours_start;
+          if (formData.working_hours_end) p.working_hours_end = formData.working_hours_end;
+          return p;
+        })(), { headers })
       ]);
       setEditingTeam(null);
-      setFormData(defaultFormData);
+      setFormData(emptyFormData);
       const promises = [fetchTeams()];
       if (selectedTeam?.id === teamId) {
         promises.push(fetchTeamDetails(teamId));
@@ -285,7 +299,7 @@ function Teams({ user, onLogout }) {
             <p className="content-subtitle">{user.role === 'admin' ? 'Manage teams and their monitoring settings' : 'View your managed teams'}</p>
           </div>
           {user.role === 'admin' && (
-            <button className="btn-primary" onClick={() => setShowCreateModal(true)}>
+            <button className="btn-primary" onClick={() => { setFormData(emptyFormData); setShowCreateModal(true); }}>
               + Create Team
             </button>
           )}
@@ -472,17 +486,17 @@ function Teams({ user, onLogout }) {
                   <div className="settings-grid">
                     <div className="form-group">
                       <label>Screenshot Interval (s)</label>
-                      <input type="number" min="30" max="600" value={formData.screenshot_interval} onChange={e => setFormData({ ...formData, screenshot_interval: parseInt(e.target.value) || 60 })} />
+                      <input type="number" min="30" max="600" value={formData.screenshot_interval} onChange={e => setFormData({ ...formData, screenshot_interval: e.target.value })} />
                       <small>30–600 seconds</small>
                     </div>
                     <div className="form-group">
                       <label>Activity Interval (s)</label>
-                      <input type="number" min="5" max="60" value={formData.activity_interval} onChange={e => setFormData({ ...formData, activity_interval: parseInt(e.target.value) || 10 })} />
+                      <input type="number" min="5" max="60" value={formData.activity_interval} onChange={e => setFormData({ ...formData, activity_interval: e.target.value })} />
                       <small>5–60 seconds</small>
                     </div>
                     <div className="form-group">
                       <label>Idle Threshold (s)</label>
-                      <input type="number" min="60" max="1800" value={formData.idle_threshold} onChange={e => setFormData({ ...formData, idle_threshold: parseInt(e.target.value) || 300 })} />
+                      <input type="number" min="60" max="1800" value={formData.idle_threshold} onChange={e => setFormData({ ...formData, idle_threshold: e.target.value })} />
                       <small>60–1800 seconds</small>
                     </div>
                   </div>
@@ -561,17 +575,17 @@ function Teams({ user, onLogout }) {
                   <div className="settings-grid">
                     <div className="form-group">
                       <label>Screenshot Interval (s)</label>
-                      <input type="number" min="30" max="600" value={formData.screenshot_interval} onChange={e => setFormData({ ...formData, screenshot_interval: parseInt(e.target.value) || 60 })} />
+                      <input type="number" min="30" max="600" value={formData.screenshot_interval} onChange={e => setFormData({ ...formData, screenshot_interval: e.target.value })} />
                       <small>30–600 seconds</small>
                     </div>
                     <div className="form-group">
                       <label>Activity Interval (s)</label>
-                      <input type="number" min="5" max="60" value={formData.activity_interval} onChange={e => setFormData({ ...formData, activity_interval: parseInt(e.target.value) || 10 })} />
+                      <input type="number" min="5" max="60" value={formData.activity_interval} onChange={e => setFormData({ ...formData, activity_interval: e.target.value })} />
                       <small>5–60 seconds</small>
                     </div>
                     <div className="form-group">
                       <label>Idle Threshold (s)</label>
-                      <input type="number" min="60" max="1800" value={formData.idle_threshold} onChange={e => setFormData({ ...formData, idle_threshold: parseInt(e.target.value) || 300 })} />
+                      <input type="number" min="60" max="1800" value={formData.idle_threshold} onChange={e => setFormData({ ...formData, idle_threshold: e.target.value })} />
                       <small>60–1800 seconds</small>
                     </div>
                   </div>
