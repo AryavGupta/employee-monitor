@@ -1,6 +1,6 @@
 {
   "name": "employee-monitoring-system",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "Desktop employee monitoring application with screenshot capture",
   "author": "Your Company",
   "main": "desktop-app/main.js",

@@ -803,26 +803,33 @@ router.get('/shift-attendance/overtime', authenticateToken, async (req, res) => 
 
     // Overtime window ends at the NEXT shift start (when next shift begins, it
     // stops being "overtime for yesterday" and becomes "regular for today").
-    // Previously capped at shift_end + 24h, which for a 9-hour shift bled the
-    // next day's regular screenshots/activity into yesterday's overtime window —
-    // causing today's 12:39 PM regular login to appear as yesterday's Extra
-    // Hours "Login" via screenshot evidence. See BUG-2026-04-21-04.
-    // For night shifts the next shift starts 24h after the current shift's
-    // start (which is before shift_end) — fall back to shift_end + 24h there.
+    // Previously capped at shift_end + 24h, which bled the next day's regular
+    // activity into yesterday's overtime window — causing today's 12:39 PM
+    // regular login to appear as yesterday's Extra Hours "Login" via
+    // screenshot evidence. See BUG-2026-04-21-04.
+    //
+    // Non-night shift (e.g. 11-20 on shiftDate=D):
+    //   shift_end = D 20:00, next shift starts (D+1) 11:00 → overtime = 15h gap
+    // Night shift (e.g. 23-07 on shiftDate=D):
+    //   shift_end = (D+1) 07:00, next shift starts (D+1) 23:00 → overtime = 16h
+    //   gap (entirely on calendar day D+1).
     const shiftEndDateObj = new Date(shiftEndLocal);
-    let overtimeEndLocalDate;
+    let nextShiftStartLocal;
     if (isNightShift) {
-      overtimeEndLocalDate = new Date(shiftEndDateObj.getTime() + 86400000);
+      // Next shift starts on the SAME calendar day as shift_end, at whStart.
+      const shiftEndDayStr = shiftEndLocal.substring(0, 10);
+      nextShiftStartLocal = `${shiftEndDayStr}T${whStart.substring(0, 5)}:00`;
     } else {
-      // Non-night: next shift starts at shiftDate+1 @ whStart.
+      // Non-night: next shift starts on shiftDate+1 at whStart.
       const nextDayStr = new Date(new Date(shiftDate).getTime() + 86400000).toISOString().split('T')[0];
-      const nextShiftStartLocal = `${nextDayStr}T${whStart.substring(0, 5)}:00`;
-      overtimeEndLocalDate = new Date(nextShiftStartLocal);
-      // Safety: next shift start must be after shift end. If working hours
-      // were configured oddly (start == end), fall back to +24h.
-      if (overtimeEndLocalDate <= shiftEndDateObj) {
-        overtimeEndLocalDate = new Date(shiftEndDateObj.getTime() + 86400000);
-      }
+      nextShiftStartLocal = `${nextDayStr}T${whStart.substring(0, 5)}:00`;
+    }
+    let overtimeEndLocalDate = new Date(nextShiftStartLocal);
+    // Safety: next shift start must be strictly after shift end. Misconfigured
+    // hours (start == end, or near-24h shifts) would produce a zero/negative
+    // window — fall back to shift_end + 24h in that degenerate case.
+    if (overtimeEndLocalDate <= shiftEndDateObj) {
+      overtimeEndLocalDate = new Date(shiftEndDateObj.getTime() + 86400000);
     }
     const overtimeEndLocal =
       `${overtimeEndLocalDate.getFullYear()}-${pad(overtimeEndLocalDate.getMonth() + 1)}-${pad(overtimeEndLocalDate.getDate())}` +

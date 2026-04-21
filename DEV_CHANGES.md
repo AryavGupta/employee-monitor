@@ -4,6 +4,23 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-21 — Night-shift overtime window fix (follow-up to BUG-04)
+
+The initial BUG-04 fix only handled non-night shifts correctly. For night shifts (start > end, e.g. 23:00-07:00) the code still computed `overtime_end = shift_end + 24h`, which overlaps the NEXT night shift (which runs 23:00 the same day as the current shift's end, through to 07:00 the following day). Same bleed as before — tomorrow night's regular activity could count as today's overtime evidence.
+
+**Fix:** For night shifts, next-shift-start is on the **same calendar day as shift_end**, at `whStart`. So for 23:00-07:00 night shift on shiftDate=D:
+- shift_end = (D+1) 07:00
+- next_shift_start = (D+1) 23:00
+- overtime window = [07:00, 23:00] on D+1 (16-hour gap)
+
+**File:** `admin-dashboard/api/routes/reports.js` `/shift-attendance/overtime`.
+
+**Validation (executed):** `node -e` math check confirmed the correct windows for 11-20, 23-07, 22:30-07:30, and the degenerate 09-09 case (falls back to +24h).
+
+Version 1.1.6 → 1.1.7; installer rebuilt.
+
+---
+
 ## 2026-04-21 — Classification + wake-handler fixes (BUG-04 / BUG-05)
 
 ### BUG-04 — In-shift session classified as Extra Hours (Aryav)
