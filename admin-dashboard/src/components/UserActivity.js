@@ -7,6 +7,13 @@ import './UserActivity.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
 
+const STATUS_GROUP_ORDER = [
+  { key: 'active', label: 'Active Sessions', headerClass: 'ua-group-active' },
+  { key: 'idle', label: 'Idle Sessions', headerClass: 'ua-group-idle' },
+  { key: 'disconnected', label: 'Disconnected Sessions', headerClass: 'ua-group-disconnected' },
+  { key: 'logged_out', label: 'Logged Out Sessions', headerClass: 'ua-group-logged-out' }
+];
+
 function UserActivity({ user, onLogout }) {
   const [loading, setLoading] = useState(true);
   const { users } = useUsers();
@@ -14,6 +21,7 @@ function UserActivity({ user, onLogout }) {
   const [activitySummary, setActivitySummary] = useState({});
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [selectedUserId, setSelectedUserId] = useState('');
+  const [expandedIds, setExpandedIds] = useState(new Set());
 
   const fetchSessions = useCallback(async () => {
     setLoading(true);
@@ -115,6 +123,23 @@ function UserActivity({ user, onLogout }) {
     }
   };
 
+  const groupedSessions = useMemo(() => {
+    const groups = { active: [], idle: [], disconnected: [], logged_out: [] };
+    sessions.forEach(session => {
+      const status = session.effective_status || (session.end_time ? 'logged_out' : 'active');
+      (groups[status] ?? groups.logged_out).push(session);
+    });
+    return groups;
+  }, [sessions]);
+
+  const toggleExpand = (id) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
   if (user.role !== 'admin' && user.role !== 'team_manager') {
     return (
       <div className="app-layout">
@@ -203,72 +228,98 @@ function UserActivity({ user, onLogout }) {
           </button>
         </div>
 
-        {/* Sessions Table */}
-        <div className="ua-section">
-          <div className="ua-section-header">
-            <h2>Sessions</h2>
-            <span className="ua-count">{sessions.length} records</span>
+        {/* Grouped Sessions */}
+        {loading ? (
+          <div className="ua-empty">Loading sessions...</div>
+        ) : sessions.length === 0 ? (
+          <div className="ua-section">
+            <div className="ua-empty">No sessions found for the selected date</div>
           </div>
-
-          <div className="ua-table-container">
-            {loading ? (
-              <div className="ua-empty">Loading sessions...</div>
-            ) : sessions.length === 0 ? (
-              <div className="ua-empty">No sessions found for the selected date</div>
-            ) : (
-              <table className="ua-table">
-                <thead>
-                  <tr>
-                    <th>Employee</th>
-                    <th>Login Time</th>
-                    <th>Logout Time</th>
-                    <th>Uptime</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map(session => {
-                    const statusInfo = getSessionStatus(session);
-                    return (
-                      <tr key={session.id}>
-                        <td>
-                          <div className="ua-emp-info">
-                            <div className="ua-emp-avatar" style={{
-                              background: session.effective_status === 'active' ? '#10b981'
-                                : session.effective_status === 'idle' ? '#f59e0b' : '#94a3b8'
-                            }}>
-                              {session.full_name?.charAt(0).toUpperCase()}
+        ) : (
+          <div className="ua-grouped-sessions">
+            {STATUS_GROUP_ORDER.map(group => {
+              const items = groupedSessions[group.key];
+              if (!items || items.length === 0) return null;
+              return (
+                <div key={group.key} className="ua-session-group">
+                  <div className={`ua-group-header ${group.headerClass}`}>
+                    <h3>{group.label}</h3>
+                    <span className="ua-group-count">{items.length}</span>
+                  </div>
+                  <div className="ua-group-body">
+                    {items.map(session => {
+                      const statusInfo = getSessionStatus(session);
+                      const isExpanded = expandedIds.has(session.id);
+                      return (
+                        <div
+                          key={session.id}
+                          className={`ua-session-row ${isExpanded ? 'expanded' : ''}`}
+                          onClick={() => toggleExpand(session.id)}
+                        >
+                          <div className="ua-session-summary">
+                            <div className="ua-emp-info">
+                              <div className="ua-emp-avatar" style={{
+                                background: session.effective_status === 'active' ? '#10b981'
+                                  : session.effective_status === 'idle' ? '#f59e0b'
+                                  : session.effective_status === 'disconnected' ? '#ef4444' : '#94a3b8'
+                              }}>
+                                {session.full_name?.charAt(0).toUpperCase()}
+                              </div>
+                              <div>
+                                <div className="ua-emp-name">{session.full_name}</div>
+                                <div className="ua-emp-email">{session.email}</div>
+                              </div>
                             </div>
-                            <div>
-                              <div className="ua-emp-name">{session.full_name}</div>
-                              <div className="ua-emp-email">{session.email}</div>
+                            <div className="ua-session-meta">
+                              <span className={`ua-badge ${statusInfo.className}`}>
+                                {statusInfo.label}
+                              </span>
+                              {statusInfo.idle && (
+                                <span className="ua-idle-hint">({statusInfo.idle})</span>
+                              )}
+                              <span className="ua-uptime">{calculateUptime(session)}</span>
                             </div>
+                            <svg className={`ua-chevron ${isExpanded ? 'open' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"/></svg>
                           </div>
-                        </td>
-                        <td>{session.start_time ? format(new Date(session.start_time), 'hh:mm a') : '--'}</td>
-                        <td>{session.end_time ? format(new Date(session.end_time), 'hh:mm a') : '--'}</td>
-                        <td className="ua-uptime">{calculateUptime(session)}</td>
-                        <td>
-                          <span className={`ua-badge ${statusInfo.className}`}>
-                            {statusInfo.label}
-                          </span>
-                          {statusInfo.idle && (
-                            <span className="ua-idle-hint">({statusInfo.idle})</span>
-                          )}
-                          {session.effective_status === 'disconnected' && session.last_heartbeat && (
-                            <div className="ua-lastseen">
-                              Last seen: {format(new Date(session.last_heartbeat), 'hh:mm a')}
+                          {isExpanded && (
+                            <div className="ua-session-details">
+                              <div className="ua-detail-row">
+                                <div className="ua-detail-item">
+                                  <span className="ua-detail-label">Login</span>
+                                  <span className="ua-detail-value">{session.start_time ? format(new Date(session.start_time), 'hh:mm a') : '--'}</span>
+                                </div>
+                                <div className="ua-detail-item">
+                                  <span className="ua-detail-label">Logout</span>
+                                  <span className="ua-detail-value">{session.end_time ? format(new Date(session.end_time), 'hh:mm a') : '--'}</span>
+                                </div>
+                                <div className="ua-detail-item">
+                                  <span className="ua-detail-label">Duration</span>
+                                  <span className="ua-detail-value">{calculateUptime(session)}</span>
+                                </div>
+                                {session.effective_status === 'disconnected' && session.last_heartbeat && (
+                                  <div className="ua-detail-item">
+                                    <span className="ua-detail-label">Last Seen</span>
+                                    <span className="ua-detail-value">{format(new Date(session.last_heartbeat), 'hh:mm a')}</span>
+                                  </div>
+                                )}
+                                {statusInfo.idle && (
+                                  <div className="ua-detail-item">
+                                    <span className="ua-detail-label">Idle Time</span>
+                                    <span className="ua-detail-value">{statusInfo.idle}</span>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

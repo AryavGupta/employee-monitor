@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import axios from 'axios';
-import { format } from 'date-fns';
 import Sidebar from './Sidebar';
 import { useUsers } from '../hooks/useUsers';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
@@ -17,12 +16,16 @@ function Teams({ user, onLogout }) {
   const [loading, setLoading] = useState(true);
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [editingTeam, setEditingTeam] = useState(null);
-  useBodyScrollLock(showCreateModal || showSettingsModal || showAddMemberModal || !!editingTeam);
-  const [formData, setFormData] = useState({ name: '', description: '', manager_id: '' });
-  const [settingsData, setSettingsData] = useState({});
+  useBodyScrollLock(showCreateModal || showAddMemberModal || !!editingTeam);
+  const defaultFormData = {
+    name: '', description: '', manager_id: '',
+    screenshot_interval: 60, activity_interval: 10, idle_threshold: 300,
+    track_urls: true, track_applications: true, track_keyboard_mouse: true,
+    working_hours_start: '', working_hours_end: '', track_outside_hours: false
+  };
+  const [formData, setFormData] = useState(defaultFormData);
   const [teamSearch, setTeamSearch] = useState('');
   const initialLoadDone = useRef(false);
 
@@ -104,12 +107,26 @@ function Teams({ user, onLogout }) {
     e.preventDefault();
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.post(`${API_URL}/api/teams`, formData, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const headers = { Authorization: `Bearer ${token}` };
+      const response = await axios.post(`${API_URL}/api/teams`, {
+        name: formData.name,
+        description: formData.description
+      }, { headers });
       if (response.data.success) {
+        const teamId = response.data.data.id;
+        await axios.put(`${API_URL}/api/teams/${teamId}/settings`, {
+          screenshot_interval: formData.screenshot_interval,
+          activity_interval: formData.activity_interval,
+          idle_threshold: formData.idle_threshold,
+          track_urls: formData.track_urls,
+          track_applications: formData.track_applications,
+          track_keyboard_mouse: formData.track_keyboard_mouse,
+          working_hours_start: formData.working_hours_start,
+          working_hours_end: formData.working_hours_end,
+          track_outside_hours: formData.track_outside_hours
+        }, { headers });
         setShowCreateModal(false);
-        setFormData({ name: '', description: '', manager_id: '' });
+        setFormData(defaultFormData);
         fetchTeams();
       }
     } catch (error) {
@@ -121,18 +138,33 @@ function Teams({ user, onLogout }) {
     e.preventDefault();
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.patch(`${API_URL}/api/teams/${editingTeam.id}`, formData, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (response.data.success) {
-        setEditingTeam(null);
-        setFormData({ name: '', description: '', manager_id: '' });
-        const promises = [fetchTeams()];
-        if (selectedTeam?.id === editingTeam.id) {
-          promises.push(fetchTeamDetails(editingTeam.id));
-        }
-        await Promise.all(promises);
+      const headers = { Authorization: `Bearer ${token}` };
+      const teamId = editingTeam.id;
+      await Promise.all([
+        axios.patch(`${API_URL}/api/teams/${teamId}`, {
+          name: formData.name,
+          description: formData.description,
+          manager_id: formData.manager_id || null
+        }, { headers }),
+        axios.put(`${API_URL}/api/teams/${teamId}/settings`, {
+          screenshot_interval: formData.screenshot_interval,
+          activity_interval: formData.activity_interval,
+          idle_threshold: formData.idle_threshold,
+          track_urls: formData.track_urls,
+          track_applications: formData.track_applications,
+          track_keyboard_mouse: formData.track_keyboard_mouse,
+          working_hours_start: formData.working_hours_start,
+          working_hours_end: formData.working_hours_end,
+          track_outside_hours: formData.track_outside_hours
+        }, { headers })
+      ]);
+      setEditingTeam(null);
+      setFormData(defaultFormData);
+      const promises = [fetchTeams()];
+      if (selectedTeam?.id === teamId) {
+        promises.push(fetchTeamDetails(teamId));
       }
+      await Promise.all(promises);
     } catch (error) {
       alert(error.response?.data?.message || 'Failed to update team');
     }
@@ -153,43 +185,6 @@ function Teams({ user, onLogout }) {
       }
     } catch (error) {
       alert(error.response?.data?.message || 'Failed to delete team');
-    }
-  };
-
-  const handleOpenSettings = async (team) => {
-    try {
-      const token = localStorage.getItem('token');
-      const response = await axios.get(`${API_URL}/api/teams/${team.id}/settings`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (response.data.success) {
-        setSettingsData(response.data.data);
-        // Only update selectedTeam if it's a different team, to preserve members data
-        if (selectedTeam?.id !== team.id) {
-          await fetchTeamDetails(team.id);
-        }
-        setShowSettingsModal(true);
-      }
-    } catch (error) {
-      console.error('Error fetching settings:', error);
-    }
-  };
-
-  const handleSaveSettings = async (e) => {
-    e.preventDefault();
-    try {
-      const token = localStorage.getItem('token');
-      const response = await axios.put(
-        `${API_URL}/api/teams/${selectedTeam.id}/settings`,
-        settingsData,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (response.data.success) {
-        setShowSettingsModal(false);
-        alert('Settings saved successfully');
-      }
-    } catch (error) {
-      alert(error.response?.data?.message || 'Failed to save settings');
     }
   };
 
@@ -229,13 +224,32 @@ function Teams({ user, onLogout }) {
     }
   };
 
-  const openEditModal = (team) => {
-    setEditingTeam(team);
-    setFormData({
-      name: team.name,
-      description: team.description || '',
-      manager_id: team.manager_id || ''
-    });
+  const openEditModal = async (team) => {
+    try {
+      const token = localStorage.getItem('token');
+      const settingsRes = await axios.get(`${API_URL}/api/teams/${team.id}/settings`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const s = settingsRes.data.success ? settingsRes.data.data : {};
+      setEditingTeam(team);
+      setFormData({
+        name: team.name,
+        description: team.description || '',
+        manager_id: team.manager_id || '',
+        screenshot_interval: s.screenshot_interval ?? 60,
+        activity_interval: s.activity_interval ?? 10,
+        idle_threshold: s.idle_threshold ?? 300,
+        track_urls: s.track_urls !== false,
+        track_applications: s.track_applications !== false,
+        track_keyboard_mouse: s.track_keyboard_mouse !== false,
+        working_hours_start: s.working_hours_start || '',
+        working_hours_end: s.working_hours_end || '',
+        track_outside_hours: !!s.track_outside_hours
+      });
+    } catch (error) {
+      console.error('Error loading team settings:', error);
+      alert('Failed to load team settings');
+    }
   };
 
   const openAddMemberModal = (team) => {
@@ -323,7 +337,6 @@ function Teams({ user, onLogout }) {
                       {user.role === 'admin' && (
                         <div className="team-actions">
                           <button onClick={(e) => { e.stopPropagation(); openEditModal(team); }}>Edit</button>
-                          <button onClick={(e) => { e.stopPropagation(); handleOpenSettings(team); }}>Settings</button>
                           <button
                             className="delete-btn"
                             onClick={(e) => { e.stopPropagation(); handleDeleteTeam(team.id); }}
@@ -422,41 +435,77 @@ function Teams({ user, onLogout }) {
           </div>
         )}
 
-        {/* Create Team Modal */}
+        {/* Create Team Modal — all-in-one, no Manager */}
         {showCreateModal && (
           <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-            <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal modal-large" onClick={e => e.stopPropagation()}>
               <h2>Create New Team</h2>
               <form onSubmit={handleCreateTeam}>
-                <div className="form-group">
-                  <label>Team Name *</label>
-                  <input
-                    type="text"
-                    value={formData.name}
-                    onChange={e => setFormData({ ...formData, name: e.target.value })}
-                    required
-                  />
+                <div className="modal-section">
+                  <h4 className="section-title">Basic Information</h4>
+                  <div className="form-group">
+                    <label>Team Name *</label>
+                    <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Description</label>
+                    <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows="2" />
+                  </div>
                 </div>
-                <div className="form-group">
-                  <label>Description</label>
-                  <textarea
-                    value={formData.description}
-                    onChange={e => setFormData({ ...formData, description: e.target.value })}
-                    rows="3"
-                  />
+
+                <div className="modal-section">
+                  <h4 className="section-title">Working Hours</h4>
+                  <div className="time-inputs">
+                    <div className="form-group">
+                      <label>Start Time</label>
+                      <input type="time" value={formData.working_hours_start} onChange={e => setFormData({ ...formData, working_hours_start: e.target.value })} />
+                    </div>
+                    <div className="form-group">
+                      <label>End Time</label>
+                      <input type="time" value={formData.working_hours_end} onChange={e => setFormData({ ...formData, working_hours_end: e.target.value })} />
+                    </div>
+                  </div>
                 </div>
-                <div className="form-group">
-                  <label>Team Manager</label>
-                  <select
-                    value={formData.manager_id}
-                    onChange={e => setFormData({ ...formData, manager_id: e.target.value })}
-                  >
-                    <option value="">Select Manager</option>
-                    {allUsers.filter(u => u.role === 'admin' || u.role === 'manager').map(u => (
-                      <option key={u.id} value={u.id}>{u.full_name}</option>
-                    ))}
-                  </select>
+
+                <div className="modal-section">
+                  <h4 className="section-title">Monitoring</h4>
+                  <div className="settings-grid">
+                    <div className="form-group">
+                      <label>Screenshot Interval (s)</label>
+                      <input type="number" min="30" max="600" value={formData.screenshot_interval} onChange={e => setFormData({ ...formData, screenshot_interval: parseInt(e.target.value) || 60 })} />
+                      <small>30–600 seconds</small>
+                    </div>
+                    <div className="form-group">
+                      <label>Activity Interval (s)</label>
+                      <input type="number" min="5" max="60" value={formData.activity_interval} onChange={e => setFormData({ ...formData, activity_interval: parseInt(e.target.value) || 10 })} />
+                      <small>5–60 seconds</small>
+                    </div>
+                    <div className="form-group">
+                      <label>Idle Threshold (s)</label>
+                      <input type="number" min="60" max="1800" value={formData.idle_threshold} onChange={e => setFormData({ ...formData, idle_threshold: parseInt(e.target.value) || 300 })} />
+                      <small>60–1800 seconds</small>
+                    </div>
+                  </div>
                 </div>
+
+                <div className="modal-section">
+                  <h4 className="section-title">Tracking Options</h4>
+                  <div className="checkbox-group">
+                    <label><input type="checkbox" checked={formData.track_urls} onChange={e => setFormData({ ...formData, track_urls: e.target.checked })} /> Track URLs/Websites</label>
+                    <label><input type="checkbox" checked={formData.track_applications} onChange={e => setFormData({ ...formData, track_applications: e.target.checked })} /> Track Applications</label>
+                    <label><input type="checkbox" checked={formData.track_keyboard_mouse} onChange={e => setFormData({ ...formData, track_keyboard_mouse: e.target.checked })} /> Track Keyboard/Mouse Activity</label>
+                  </div>
+                </div>
+
+                <div className="modal-section">
+                  <h4 className="section-title">Extra Hours</h4>
+                  <label className="checkbox-label">
+                    <input type="checkbox" checked={formData.track_outside_hours} onChange={e => setFormData({ ...formData, track_outside_hours: e.target.checked })} />
+                    <span>Allow tracking outside working hours</span>
+                  </label>
+                  <p className="settings-help">Continues capturing after shift ends, tagged as Extra Hours.</p>
+                </div>
+
                 <div className="modal-actions">
                   <button type="button" onClick={() => setShowCreateModal(false)}>Cancel</button>
                   <button type="submit" className="btn-primary">Create Team</button>
@@ -466,164 +515,89 @@ function Teams({ user, onLogout }) {
           </div>
         )}
 
-        {/* Edit Team Modal */}
+        {/* Edit Team Modal — combined Edit + Settings, includes Manager */}
         {editingTeam && (
           <div className="modal-overlay" onClick={() => setEditingTeam(null)}>
-            <div className="modal" onClick={e => e.stopPropagation()}>
-              <h2>Edit Team</h2>
-              <form onSubmit={handleUpdateTeam}>
-                <div className="form-group">
-                  <label>Team Name *</label>
-                  <input
-                    type="text"
-                    value={formData.name}
-                    onChange={e => setFormData({ ...formData, name: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Description</label>
-                  <textarea
-                    value={formData.description}
-                    onChange={e => setFormData({ ...formData, description: e.target.value })}
-                    rows="3"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Team Manager</label>
-                  <select
-                    value={formData.manager_id}
-                    onChange={e => setFormData({ ...formData, manager_id: e.target.value })}
-                  >
-                    <option value="">Select Manager</option>
-                    {allUsers.filter(u => u.role === 'admin' || u.role === 'manager').map(u => (
-                      <option key={u.id} value={u.id}>{u.full_name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="modal-actions">
-                  <button type="button" onClick={() => setEditingTeam(null)}>Cancel</button>
-                  <button type="submit" className="btn-primary">Save Changes</button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {/* Settings Modal */}
-        {showSettingsModal && (
-          <div className="modal-overlay" onClick={() => setShowSettingsModal(false)}>
             <div className="modal modal-large" onClick={e => e.stopPropagation()}>
-              <h2>Monitoring Settings - {selectedTeam?.name}</h2>
-              <form onSubmit={handleSaveSettings}>
-                <div className="settings-grid">
+              <h2>Edit Team — {editingTeam.name}</h2>
+              <form onSubmit={handleUpdateTeam}>
+                <div className="modal-section">
+                  <h4 className="section-title">Basic Information</h4>
                   <div className="form-group">
-                    <label>Screenshot Interval (seconds)</label>
-                    <input
-                      type="number"
-                      min="30"
-                      max="600"
-                      value={settingsData.screenshot_interval || 60}
-                      onChange={e => setSettingsData({ ...settingsData, screenshot_interval: parseInt(e.target.value) })}
-                    />
-                    <small>How often to capture screenshots (30-600 seconds)</small>
+                    <label>Team Name *</label>
+                    <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} required />
                   </div>
                   <div className="form-group">
-                    <label>Activity Interval (seconds)</label>
-                    <input
-                      type="number"
-                      min="5"
-                      max="60"
-                      value={settingsData.activity_interval || 10}
-                      onChange={e => setSettingsData({ ...settingsData, activity_interval: parseInt(e.target.value) })}
-                    />
-                    <small>How often to log activity (5-60 seconds)</small>
+                    <label>Description</label>
+                    <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows="2" />
                   </div>
                   <div className="form-group">
-                    <label>Idle Threshold (seconds)</label>
-                    <input
-                      type="number"
-                      min="60"
-                      max="1800"
-                      value={settingsData.idle_threshold || 300}
-                      onChange={e => setSettingsData({ ...settingsData, idle_threshold: parseInt(e.target.value) })}
-                    />
-                    <small>Mark user idle after this many seconds of inactivity</small>
+                    <label>Team Manager</label>
+                    <select value={formData.manager_id} onChange={e => setFormData({ ...formData, manager_id: e.target.value })}>
+                      <option value="">Select Manager</option>
+                      {allUsers.filter(u => u.role === 'admin' || u.role === 'manager').map(u => (
+                        <option key={u.id} value={u.id}>{u.full_name}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 
-                <div className="settings-section">
-                  <h4>Tracking Options</h4>
-                  <div className="checkbox-group">
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={settingsData.track_urls !== false}
-                        onChange={e => setSettingsData({ ...settingsData, track_urls: e.target.checked })}
-                      />
-                      Track URLs/Websites
-                    </label>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={settingsData.track_applications !== false}
-                        onChange={e => setSettingsData({ ...settingsData, track_applications: e.target.checked })}
-                      />
-                      Track Applications
-                    </label>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={settingsData.track_keyboard_mouse !== false}
-                        onChange={e => setSettingsData({ ...settingsData, track_keyboard_mouse: e.target.checked })}
-                      />
-                      Track Keyboard/Mouse Activity
-                    </label>
-                  </div>
-                </div>
-
-                <div className="settings-section">
-                  <h4>Working Hours</h4>
+                <div className="modal-section">
+                  <h4 className="section-title">Working Hours</h4>
                   <div className="time-inputs">
                     <div className="form-group">
                       <label>Start Time</label>
-                      <input
-                        type="time"
-                        value={settingsData.working_hours_start || ''}
-                        onChange={e => setSettingsData({ ...settingsData, working_hours_start: e.target.value })}
-                      />
+                      <input type="time" value={formData.working_hours_start} onChange={e => setFormData({ ...formData, working_hours_start: e.target.value })} />
                     </div>
                     <div className="form-group">
                       <label>End Time</label>
-                      <input
-                        type="time"
-                        value={settingsData.working_hours_end || ''}
-                        onChange={e => setSettingsData({ ...settingsData, working_hours_end: e.target.value })}
-                      />
+                      <input type="time" value={formData.working_hours_end} onChange={e => setFormData({ ...formData, working_hours_end: e.target.value })} />
                     </div>
                   </div>
                 </div>
 
-                <div className="settings-section">
-                  <h4>Extra Hours Tracking</h4>
+                <div className="modal-section">
+                  <h4 className="section-title">Monitoring</h4>
+                  <div className="settings-grid">
+                    <div className="form-group">
+                      <label>Screenshot Interval (s)</label>
+                      <input type="number" min="30" max="600" value={formData.screenshot_interval} onChange={e => setFormData({ ...formData, screenshot_interval: parseInt(e.target.value) || 60 })} />
+                      <small>30–600 seconds</small>
+                    </div>
+                    <div className="form-group">
+                      <label>Activity Interval (s)</label>
+                      <input type="number" min="5" max="60" value={formData.activity_interval} onChange={e => setFormData({ ...formData, activity_interval: parseInt(e.target.value) || 10 })} />
+                      <small>5–60 seconds</small>
+                    </div>
+                    <div className="form-group">
+                      <label>Idle Threshold (s)</label>
+                      <input type="number" min="60" max="1800" value={formData.idle_threshold} onChange={e => setFormData({ ...formData, idle_threshold: parseInt(e.target.value) || 300 })} />
+                      <small>60–1800 seconds</small>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="modal-section">
+                  <h4 className="section-title">Tracking Options</h4>
+                  <div className="checkbox-group">
+                    <label><input type="checkbox" checked={formData.track_urls} onChange={e => setFormData({ ...formData, track_urls: e.target.checked })} /> Track URLs/Websites</label>
+                    <label><input type="checkbox" checked={formData.track_applications} onChange={e => setFormData({ ...formData, track_applications: e.target.checked })} /> Track Applications</label>
+                    <label><input type="checkbox" checked={formData.track_keyboard_mouse} onChange={e => setFormData({ ...formData, track_keyboard_mouse: e.target.checked })} /> Track Keyboard/Mouse Activity</label>
+                  </div>
+                </div>
+
+                <div className="modal-section">
+                  <h4 className="section-title">Extra Hours</h4>
                   <label className="checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={!!settingsData.track_outside_hours}
-                      onChange={e => setSettingsData({ ...settingsData, track_outside_hours: e.target.checked })}
-                    />
-                    <span>Allow tracking outside working hours (Extra Hours mode)</span>
+                    <input type="checkbox" checked={formData.track_outside_hours} onChange={e => setFormData({ ...formData, track_outside_hours: e.target.checked })} />
+                    <span>Allow tracking outside working hours</span>
                   </label>
-                  <p className="settings-help">
-                    When enabled, the desktop app continues capturing screenshots and activity
-                    after the working-hours window ends, tagging that work as Extra Hours.
-                    When disabled, the user is marked Logged Out at shift end.
-                  </p>
+                  <p className="settings-help">Continues capturing after shift ends, tagged as Extra Hours.</p>
                 </div>
 
                 <div className="modal-actions">
-                  <button type="button" onClick={() => setShowSettingsModal(false)}>Cancel</button>
-                  <button type="submit" className="btn-primary">Save Settings</button>
+                  <button type="button" onClick={() => setEditingTeam(null)}>Cancel</button>
+                  <button type="submit" className="btn-primary">Save Changes</button>
                 </div>
               </form>
             </div>

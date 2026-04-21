@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
-import { format, formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow } from 'date-fns';
 import Sidebar from './Sidebar';
 import { getStatusLabel, getStatusClassName, getStatusColor } from '../utils/statusHelpers';
 import './Dashboard.css';
@@ -8,11 +8,11 @@ import './Dashboard.css';
 const API_URL = process.env.REACT_APP_API_URL || '';
 
 function Dashboard({ user, onLogout }) {
-  const [stats, setStats] = useState(null);
   const [presence, setPresence] = useState({ online: 0, idle: 0, offline: 0, total_users: 0 });
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const fetchDashboardData = useCallback(async () => {
     try {
@@ -20,14 +20,12 @@ function Dashboard({ user, onLogout }) {
       const headers = { Authorization: `Bearer ${token}` };
 
       const requests = [
-        axios.get(`${API_URL}/api/screenshots/stats/summary`, { headers }),
         axios.get(`${API_URL}/api/presence/summary`, { headers }),
         axios.get(`${API_URL}/api/presence/online`, { headers })
       ];
 
-      const [statsRes, presenceRes, employeesRes] = await Promise.all(requests);
+      const [presenceRes, employeesRes] = await Promise.all(requests);
 
-      if (statsRes.data.success) setStats(statsRes.data.data);
       if (presenceRes.data.success) setPresence(presenceRes.data.data);
       if (employeesRes.data.success) setEmployees(employeesRes.data.data);
     } catch (error) {
@@ -52,12 +50,23 @@ function Dashboard({ user, onLogout }) {
   );
 
   const filteredEmployees = useMemo(() =>
-    employees.filter(emp =>
-      emp.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      emp.email?.toLowerCase().includes(searchTerm.toLowerCase())
-    ),
-    [employees, searchTerm]
+    employees.filter(emp => {
+      const matchesSearch = emp.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        emp.email?.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesStatus = statusFilter === 'all' || emp.effective_status === statusFilter;
+      return matchesSearch && matchesStatus;
+    }),
+    [employees, searchTerm, statusFilter]
   );
+
+  const statusCounts = useMemo(() => {
+    const counts = { all: employees.length, online: 0, idle: 0, disconnected: 0, logged_out: 0 };
+    employees.forEach(emp => {
+      const s = emp.effective_status;
+      if (counts[s] !== undefined) counts[s]++;
+    });
+    return counts;
+  }, [employees]);
 
   if (loading) {
     return (
@@ -132,33 +141,18 @@ function Dashboard({ user, onLogout }) {
               <div className="dash-stat-label">Idle</div>
               <div className="dash-stat-value">{presence.idle}</div>
               <div className="dash-stat-sub">
-                Avg idle: {presence.idle > 0 ? `${presence.idle} user${presence.idle !== 1 ? 's' : ''}` : 'None'}
+                {presence.idle > 0 ? `${presence.idle} user${presence.idle !== 1 ? 's' : ''}` : 'None idle'}
               </div>
             </div>
             <div className="dash-stat-icon amber">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>
             </div>
           </div>
-
-          <div className="dash-stat-card dark">
-            <div className="dash-stat-content">
-              <div className="dash-stat-label">Screenshots Today</div>
-              <div className="dash-stat-value">{stats?.total_screenshots?.toLocaleString() || 0}</div>
-              <div className="dash-stat-sub">
-                {presence.total_users > 0
-                  ? `~${Math.round((stats?.total_screenshots || 0) / presence.total_users)} per employee`
-                  : ''}
-              </div>
-            </div>
-            <div className="dash-stat-icon blue">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
-            </div>
-          </div>
         </div>
 
         <div className="dash-section">
           <div className="dash-section-header">
-            <h2>Employee Activity</h2>
+            <h2>Employees</h2>
             <div className="dash-section-actions">
               <button className="dash-btn outline" onClick={fetchDashboardData}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -167,21 +161,36 @@ function Dashboard({ user, onLogout }) {
             </div>
           </div>
 
+          <div className="dash-filter-tabs">
+            {[
+              { key: 'all', label: 'All' },
+              { key: 'online', label: 'Active' },
+              { key: 'idle', label: 'Idle' },
+              { key: 'disconnected', label: 'Disconnected' },
+              { key: 'logged_out', label: 'Logged Out' }
+            ].map(tab => (
+              <button
+                key={tab.key}
+                className={`dash-filter-tab ${statusFilter === tab.key ? 'active' : ''}`}
+                onClick={() => setStatusFilter(tab.key)}
+              >
+                {tab.label} <span className="dash-filter-count">({statusCounts[tab.key] ?? 0})</span>
+              </button>
+            ))}
+          </div>
+
           <div className="dash-table-container">
             <table className="dash-table">
               <thead>
                 <tr>
                   <th>Employee</th>
                   <th>Status</th>
-                  <th>Current App</th>
-                  <th>Active Time</th>
-                  <th>Idle Time</th>
                   <th>Last Seen</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredEmployees.length === 0 ? (
-                  <tr><td colSpan="6" className="dash-empty">No employees found</td></tr>
+                  <tr><td colSpan="3" className="dash-empty">No employees found</td></tr>
                 ) : (
                   filteredEmployees.map((emp) => (
                     <tr key={emp.user_id}>
@@ -197,9 +206,6 @@ function Dashboard({ user, onLogout }) {
                         </div>
                       </td>
                       <td>{getStatusBadge(emp.effective_status)}</td>
-                      <td className="emp-app">{emp.current_application || '--'}</td>
-                      <td>{emp.effective_status === 'online' ? formatDistanceToNow(new Date(emp.last_heartbeat), { addSuffix: false }) : '--'}</td>
-                      <td>{emp.effective_status === 'idle' && emp.idle_seconds ? `${Math.round(emp.idle_seconds / 60)}m` : '--'}</td>
                       <td className="emp-lastseen">
                         {emp.last_heartbeat
                           ? formatDistanceToNow(new Date(emp.last_heartbeat), { addSuffix: true })

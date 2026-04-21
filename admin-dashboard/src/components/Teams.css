@@ -479,7 +479,31 @@
   color: #0f172a;
 }
 
-/* Settings Modal */
+/* Modal Sections */
+.modal-section {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.modal-section:last-of-type {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.section-title {
+  margin: 0 0 14px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: none;
+  padding: 0;
+}
+
+/* Settings Grid */
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
