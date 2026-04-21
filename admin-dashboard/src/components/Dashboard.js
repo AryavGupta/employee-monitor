@@ -60,7 +60,11 @@ function Dashboard({ user, onLogout }) {
   );
 
   const statusCounts = useMemo(() => {
-    const counts = { all: employees.length, online: 0, idle: 0, disconnected: 0, logged_out: 0 };
+    // Presence API returns effective_status ∈ {online, idle, offline, logged_out}
+    // (presence.js EFFECTIVE_STATUS_SQL). The UI labels 'offline' as "Disconnected"
+    // but the key here must be 'offline' or counts/filtering break. Sessions API
+    // uses 'disconnected' for the same concept — don't confuse the two.
+    const counts = { all: employees.length, online: 0, idle: 0, offline: 0, logged_out: 0 };
     employees.forEach(emp => {
       const s = emp.effective_status;
       if (counts[s] !== undefined) counts[s]++;
@@ -166,7 +170,7 @@ function Dashboard({ user, onLogout }) {
               { key: 'all', label: 'All' },
               { key: 'online', label: 'Active' },
               { key: 'idle', label: 'Idle' },
-              { key: 'disconnected', label: 'Disconnected' },
+              { key: 'offline', label: 'Disconnected' },
               { key: 'logged_out', label: 'Logged Out' }
             ].map(tab => (
               <button
