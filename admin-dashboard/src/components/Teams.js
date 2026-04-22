@@ -19,6 +19,21 @@ function Teams({ user, onLogout }) {
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [editingTeam, setEditingTeam] = useState(null);
   useBodyScrollLock(showCreateModal || showAddMemberModal || !!editingTeam);
+
+  useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') {
+        if (showCreateModal) setShowCreateModal(false);
+        else if (editingTeam) setEditingTeam(null);
+        else if (showAddMemberModal) setShowAddMemberModal(false);
+      }
+    };
+    if (showCreateModal || editingTeam || showAddMemberModal) {
+      document.addEventListener('keydown', handleEsc);
+      return () => document.removeEventListener('keydown', handleEsc);
+    }
+  }, [showCreateModal, editingTeam, showAddMemberModal]);
+
   // Create form defaults: text fields empty (admin fills per-team), numeric
   // intervals empty (server applies schema defaults), tracking checkboxes all
   // on, standard 9-5 working hours. Don't inherit values from a previous Edit
@@ -468,7 +483,13 @@ function Teams({ user, onLogout }) {
         {showCreateModal && (
           <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
             <div className="modal modal-large" onClick={e => e.stopPropagation()}>
-              <h2>Create New Team</h2>
+              <div className="modal-header">
+                <div className="modal-header-left">
+                  <h2>Create New Team</h2>
+                  <p>Set up a new team with monitoring configuration</p>
+                </div>
+                <button type="button" className="modal-close-btn" onClick={() => setShowCreateModal(false)}>&times;</button>
+              </div>
               <form onSubmit={handleCreateTeam}>
                 <div className="modal-section">
                   <h4 className="section-title">Basic Information</h4>
@@ -548,7 +569,13 @@ function Teams({ user, onLogout }) {
         {editingTeam && (
           <div className="modal-overlay" onClick={() => setEditingTeam(null)}>
             <div className="modal modal-large" onClick={e => e.stopPropagation()}>
-              <h2>Edit Team — {editingTeam.name}</h2>
+              <div className="modal-header">
+                <div className="modal-header-left">
+                  <h2>Edit Team</h2>
+                  <p>Update team settings and monitoring configuration</p>
+                </div>
+                <button type="button" className="modal-close-btn" onClick={() => setEditingTeam(null)}>&times;</button>
+              </div>
               <form onSubmit={handleUpdateTeam}>
                 <div className="modal-section">
                   <h4 className="section-title">Basic Information</h4>
@@ -637,7 +664,13 @@ function Teams({ user, onLogout }) {
         {showAddMemberModal && (
           <div className="modal-overlay" onClick={() => setShowAddMemberModal(false)}>
             <div className="modal" onClick={e => e.stopPropagation()}>
-              <h2>Add Members to {selectedTeam?.name}</h2>
+              <div className="modal-header">
+                <div className="modal-header-left">
+                  <h2>Add Members</h2>
+                  <p>Add members to {selectedTeam?.name}</p>
+                </div>
+                <button type="button" className="modal-close-btn" onClick={() => setShowAddMemberModal(false)}>&times;</button>
+              </div>
               <div className="unassigned-users-list">
                 {unassignedUsers.length === 0 ? (
                   <div className="empty-state">No unassigned users available</div>
