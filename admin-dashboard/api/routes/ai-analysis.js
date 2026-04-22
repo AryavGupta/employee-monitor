@@ -1,7 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken, authorizeAdminOrManager } = require('./auth');
-const { analyzeScreenshots } = require('../services/geminiService');
+// Lazy-load gemini so @google/generative-ai isn't pulled into cold starts
+// for routes that never touch AI analysis. Node caches the require.
+let _gemini;
+const geminiSvc = () => _gemini || (_gemini = require('../services/geminiService'));
 
 // Trigger analysis for user + date
 router.post('/analyze', authenticateToken, authorizeAdminOrManager, async (req, res) => {
@@ -36,7 +39,7 @@ router.post('/analyze', authenticateToken, authorizeAdminOrManager, async (req, 
     }
 
     // Run AI analysis
-    const analysis = await analyzeScreenshots(screenshots.rows);
+    const analysis = await geminiSvc().analyzeScreenshots(screenshots.rows);
     const screenshotIds = screenshots.rows.map(s => s.id);
 
     // Store result (upsert)

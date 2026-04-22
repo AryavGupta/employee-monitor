@@ -3,7 +3,10 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const router = express.Router();
-const { sendWelcomeEmail, isEmailConfigured } = require('../services/emailService');
+// Lazy-load emailService so nodemailer (heavy) isn't pulled into cold starts
+// for every auth call (login/verify/refresh). Node caches the require.
+let _email;
+const emailSvc = () => _email || (_email = require('../services/emailService'));
 
 // JWT_SECRET is required - no fallback to prevent security vulnerabilities
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -109,8 +112,8 @@ router.post('/register', authenticateToken, authorizeAdmin, async (req, res) => 
     let emailSent = false;
     let emailError = null;
     if (sendEmail) {
-      if (isEmailConfigured()) {
-        const emailResult = await sendWelcomeEmail(email.toLowerCase(), fullName, password);
+      if (emailSvc().isEmailConfigured()) {
+        const emailResult = await emailSvc().sendWelcomeEmail(email.toLowerCase(), fullName, password);
         emailSent = emailResult.success;
         if (!emailResult.success) {
           emailError = emailResult.error;
@@ -131,7 +134,7 @@ router.post('/register', authenticateToken, authorizeAdmin, async (req, res) => 
       message,
       user: result.rows[0],
       emailSent,
-      emailConfigured: isEmailConfigured()
+      emailConfigured: emailSvc().isEmailConfigured()
     });
   } catch (error) {
     console.error('Registration error:', error);
