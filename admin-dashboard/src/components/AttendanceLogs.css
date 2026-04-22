@@ -86,11 +86,10 @@
 /* Sections */
 .al-section {
   background: white;
-  padding: 24px 28px;
   border-radius: 16px;
   border: 1px solid #e2e8f0;
   margin-bottom: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
 }
 
 .al-section-header {
@@ -98,12 +97,17 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.al-section-body {
+  padding: 24px;
 }
 
 .al-section-header h3 {
   margin: 0;
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 600;
   color: #0f172a;
   flex: 1;
@@ -171,12 +175,33 @@
    distinguished with a soft purple tint and dashed top border so admins can scan
    the page and immediately see post-shift work as a separate bucket. */
 .al-overtime-block {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 2px dashed #c4b5fd;
+  margin: 24px -24px -24px;
+  border-radius: 0 0 16px 16px;
+  border-top: 1px solid rgba(139, 92, 246, 0.2);
+  overflow: hidden;
 }
-.al-overtime-block .al-shift-header h3 { color: #5b21b6; }
-.al-overtime-block .al-stat { background: #f5f3ff; border-color: #ede9fe; }
+.al-overtime-block .al-shift-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f5f3ff;
+  padding: 16px 24px;
+  margin-bottom: 20px;
+}
+.al-overtime-block .al-shift-header h3 { color: #5b21b6; margin: 0; }
+.al-overtime-block .al-shift-label {
+  background: #ede9fe;
+  color: #5b21b6;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.al-overtime-block .al-stats-grid { padding: 0 24px; }
+.al-overtime-block .al-sessions { padding: 0 24px 24px; }
+.al-overtime-block .al-stat { border-color: #ede9fe; }
 
 /* Stats Grid */
 .al-stats-grid {
@@ -187,10 +212,11 @@
 }
 
 .al-stat {
-  background: #f8fafc;
+  background: #ffffff;
   padding: 16px;
   border-radius: 12px;
-  border: 1px solid #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #e2e8f0;
   text-align: center;
 }
 
@@ -207,25 +233,27 @@
 .al-stat-value.active { color: #15803d; }
 .al-stat-value.idle { color: #b45309; }
 
-/* Pastel tile variants — match Pencil design. Each tile has a subtle tint
-   so the 5-in-a-row strip reads at a glance. Overtime block overrides
-   .al-stat above with a unified purple tint, so these tints only apply
-   to the regular shift block. */
-.al-stat--login { background: #eff6ff; border-color: #dbeafe; }
+.al-stat--login { background: #ffffff; border-left-color: #3b82f6; }
 .al-stat--login .al-stat-value { color: #1d4ed8; }
-.al-stat--logout { background: #f0fdf4; border-color: #dcfce7; }
+.al-stat--logout { background: #ffffff; border-left-color: #22c55e; }
 .al-stat--logout .al-stat-value { color: #15803d; }
-.al-stat--total { background: #f5f3ff; border-color: #ede9fe; }
+.al-stat--total { background: #ffffff; border-left-color: #8b5cf6; }
 .al-stat--total .al-stat-value { color: #6d28d9; }
-.al-stat--active { background: #ecfdf5; border-color: #d1fae5; }
+.al-stat--active { background: #ffffff; border-left-color: #10b981; }
 .al-stat--active .al-stat-value { color: #059669; }
-.al-stat--idle { background: #fffbeb; border-color: #fef3c7; }
+.al-stat--idle { background: #ffffff; border-left-color: #f59e0b; }
 .al-stat--idle .al-stat-value { color: #b45309; }
 
-/* Overtime block: use indigo-tinted variants for LOGIN/LOGOUT
-   so users can tell columns apart within the purple theme. */
-.al-overtime-block .al-stat--login { background: #eef2ff; border-color: #e0e7ff; }
-.al-overtime-block .al-stat--logout { background: #eef2ff; border-color: #e0e7ff; }
+.al-overtime-block .al-stat--login { background: #f8fafc; border-left-color: #3b82f6; }
+.al-overtime-block .al-stat--login .al-stat-value { color: #1d4ed8; }
+.al-overtime-block .al-stat--logout { background: #f8fafc; border-left-color: #3b82f6; }
+.al-overtime-block .al-stat--logout .al-stat-value { color: #15803d; }
+.al-overtime-block .al-stat--total { background: #f8fafc; border-left-color: #8b5cf6; }
+.al-overtime-block .al-stat--total .al-stat-value { color: #6d28d9; }
+.al-overtime-block .al-stat--active { background: #ecfdf5; border-left-color: #10b981; }
+.al-overtime-block .al-stat--active .al-stat-value { color: #059669; }
+.al-overtime-block .al-stat--idle { background: #fffbeb; border-left-color: #f59e0b; }
+.al-overtime-block .al-stat--idle .al-stat-value { color: #b45309; }
 
 /* Sessions */
 .al-sessions { margin-top: 16px; }
@@ -289,10 +317,6 @@
   gap: 12px;
   align-items: flex-end;
   margin-bottom: 16px;
-  padding: 16px;
-  background: #f8fafc;
-  border-radius: 10px;
-  border: 1px solid #f1f5f9;
 }
 
 .al-filter-group {
@@ -331,11 +355,11 @@
 
 .al-refresh-btn {
   padding: 0 16px;
-  height: 36px;
-  border: none;
+  height: 40px;
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
-  background: #3b82f6;
-  color: white;
+  background: #f8fafc;
+  color: #0f172a;
   font-weight: 500;
   font-size: 13px;
   cursor: pointer;
@@ -343,7 +367,7 @@
   white-space: nowrap;
 }
 
-.al-refresh-btn:hover:not(:disabled) { background: #2563eb; }
+.al-refresh-btn:hover:not(:disabled) { background: #f1f5f9; border-color: #cbd5e1; }
 .al-refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .al-refresh-btn-sm {
@@ -356,31 +380,32 @@
 }
 
 .al-export-btn {
-  padding: 0 16px;
-  height: 36px;
-  border: 1px solid #10b981;
+  padding: 0 18px;
+  height: 40px;
+  border: 1px solid #3b82f6;
   border-radius: 8px;
-  background: #ecfdf5;
-  color: #059669;
+  background: transparent;
+  color: #3b82f6;
   font-weight: 500;
   font-size: 13px;
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
 }
-.al-export-btn:hover:not(:disabled) { background: #d1fae5; }
+.al-export-btn:hover:not(:disabled) { background: #eff6ff; }
 .al-export-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Summary Bar */
 .al-log-summary {
   display: flex;
   gap: 20px;
-  padding: 10px 16px;
+  padding: 12px 16px;
   background: #f8fafc;
   border-radius: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   font-size: 13px;
   color: #475569;
+  border: 1px solid #f1f5f9;
 }
 
 .al-log-summary .active { color: #15803d; }
@@ -390,8 +415,8 @@
 .al-log-scroll {
   max-height: 500px;
   overflow-y: auto;
-  border: 1px solid #f1f5f9;
-  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
 }
 
 .al-log-scroll thead { position: sticky; top: 0; z-index: 1; }
@@ -415,14 +440,14 @@
 /* Load More */
 .al-load-more {
   display: block;
-  width: 100%;
-  padding: 12px;
-  margin-top: 12px;
+  width: auto;
+  padding: 10px 32px;
+  margin: 12px auto 0;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: white;
-  color: #475569;
-  font-size: 14px;
+  color: #64748b;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;

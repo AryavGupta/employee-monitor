@@ -398,6 +398,7 @@ function AttendanceLogs({ user, onLogout }) {
                 </div>
               </div>
 
+              <div className="al-section-body">
               <div className="al-shift-date">
                 {(() => {
                   // "Today, April 21, 2026" / "Yesterday, ..." / full day name otherwise.
@@ -542,6 +543,7 @@ function AttendanceLogs({ user, onLogout }) {
                   )}
                 </div>
               )}
+              </div>
             </div>
 
             {/* ===== ACTIVITY LOGS ===== */}
@@ -550,6 +552,7 @@ function AttendanceLogs({ user, onLogout }) {
                 <h3>Activity Logs</h3>
               </div>
 
+              <div className="al-section-body">
               {/* Log Filters */}
               <div className="al-log-filters">
                 <div className="al-filter-group">
@@ -655,6 +658,7 @@ function AttendanceLogs({ user, onLogout }) {
               ) : (
                 <div className="al-empty">No activity logs found for the selected filters</div>
               )}
+              </div>
             </div>
           </>
         )}
