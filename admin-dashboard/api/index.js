@@ -18,8 +18,13 @@ const aiAnalysisRoutes = require('./routes/ai-analysis');
 const app = express();
 
 // Database connection using Supabase
+// Serverless sizing: pgBouncer (:6543) fans out to DB, but each warm Lambda
+// holds its own pool. Keep max small so bursts don't exhaust pgBouncer.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  max: 5,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
   ssl: {
     rejectUnauthorized: false
   }
