@@ -72,7 +72,18 @@ function Teams({ user, onLogout }) {
     }
   }, []);
 
+  // Optimistic render: paint header/description/counts from the list row
+  // immediately on click, then swap in full members+settings when the
+  // detail fetch returns. Avoids the 2s "blank panel" pause on Vercel.
   const fetchTeamDetails = useCallback(async (teamId, saveToStorage = true) => {
+    setSelectedTeam(prev => {
+      // If we already have fully-loaded details for this team, keep them
+      // (prevents flicker on re-click) and still let the background fetch refresh presence.
+      if (prev?.id === teamId && prev.members) return prev;
+      const fromList = teams.find(t => t.id === teamId);
+      return fromList ? { ...fromList, members: null, settings: null, _loading: true } : prev;
+    });
+
     try {
       const token = localStorage.getItem('token');
       const response = await axios.get(`${API_URL}/api/teams/${teamId}`, {
@@ -88,7 +99,7 @@ function Teams({ user, onLogout }) {
       console.error('Error fetching team details:', error);
       sessionStorage.removeItem(STORAGE_KEY);
     }
-  }, []);
+  }, [teams]);
 
   // Initial load - restore selected team from storage
   useEffect(() => {
@@ -387,18 +398,20 @@ function Teams({ user, onLogout }) {
 
                   <div className="team-stats">
                     <div className="stat-item">
-                      <span className="stat-value">{selectedTeam.members?.length || 0}</span>
+                      <span className="stat-value">{selectedTeam.members?.length ?? selectedTeam.member_count ?? '—'}</span>
                       <span className="stat-label">Total Members</span>
                     </div>
                     <div className="stat-item">
                       <span className="stat-value">
-                        {selectedTeam.members?.filter(m => m.presence_status === 'online').length || 0}
+                        {selectedTeam.members
+                          ? selectedTeam.members.filter(m => m.presence_status === 'online').length
+                          : (selectedTeam.online_count ?? '—')}
                       </span>
                       <span className="stat-label">Online Now</span>
                     </div>
                     <div className="stat-item">
                       <span className="stat-value">
-                        {selectedTeam.members?.filter(m => m.is_active).length || 0}
+                        {selectedTeam.members ? selectedTeam.members.filter(m => m.is_active).length : '—'}
                       </span>
                       <span className="stat-label">Active</span>
                     </div>
@@ -406,10 +419,12 @@ function Teams({ user, onLogout }) {
 
                   <h4>Team Members</h4>
                   <div className="members-list">
-                    {selectedTeam.members?.length === 0 ? (
+                    {selectedTeam._loading || !selectedTeam.members ? (
+                      <div className="empty-state">Loading members…</div>
+                    ) : selectedTeam.members.length === 0 ? (
                       <div className="empty-state">No members in this team</div>
                     ) : (
-                      selectedTeam.members?.map(member => (
+                      selectedTeam.members.map(member => (
                         <div key={member.id} className="member-item">
                           <div className="member-status">
                             <span
