@@ -3,6 +3,7 @@ import axios from 'axios';
 import { formatDistanceToNow } from 'date-fns';
 import Sidebar from './Sidebar';
 import { getStatusLabel, getStatusClassName, getStatusColor } from '../utils/statusHelpers';
+import { formatOs } from '../utils/clientMeta';
 import './Dashboard.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -189,12 +190,14 @@ function Dashboard({ user, onLogout }) {
                 <tr>
                   <th>Employee</th>
                   <th>Status</th>
+                  <th>App Version</th>
+                  <th>OS</th>
                   <th>Last Seen</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredEmployees.length === 0 ? (
-                  <tr><td colSpan="3" className="dash-empty">No employees found</td></tr>
+                  <tr><td colSpan="5" className="dash-empty">No employees found</td></tr>
                 ) : (
                   filteredEmployees.map((emp) => (
                     <tr key={emp.user_id}>
@@ -210,6 +213,8 @@ function Dashboard({ user, onLogout }) {
                         </div>
                       </td>
                       <td>{getStatusBadge(emp.effective_status)}</td>
+                      <td className="emp-version">{emp.app_version ?? '—'}</td>
+                      <td className="emp-os">{formatOs(emp)}</td>
                       <td className="emp-lastseen">
                         {emp.last_heartbeat
                           ? formatDistanceToNow(new Date(emp.last_heartbeat), { addSuffix: true })

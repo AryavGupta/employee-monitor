@@ -8,6 +8,16 @@
 
 ## Currently Pending
 
+### P0 — 2026-04-23 Dashboard client metadata + overtime buffer (rollout)
+
+Code complete. To finish rollout:
+
+- [ ] Apply migration: `cd admin-dashboard && node scripts/apply-migration-004-presence-client-meta.js` (or run `migrations/004_presence_client_meta.sql` via Supabase SQL editor).
+- [ ] Push to `main` → Vercel deploys dashboard + API.
+- [ ] Bump `desktop-app/package.json` patch version → `npm run build:desktop` → distribute new installer (especially to Gaurav — he's running a pre-overtime build, which is why his shift didn't split on 2026-04-23).
+- [ ] Validate: open Dashboard, confirm your own row shows `App Version` = the version in `desktop-app/package.json` and `OS` ≈ "Windows 10.0.xxxxx". Pre-upgrade users show "—" until they next heartbeat.
+- [ ] Validate overtime buffer: set a test team's `working_hours_end` to +1 minute, `track_outside_hours=true`. Wait past the minute. Confirm in DB that `sessions` has a regular row ending ~30s after shift end and an overtime row starting ~30s after shift end. Repeat, but quit the app 10s after shift end → confirm NO `overtime=true` session row gets created.
+
 ### P0 — 2026-04-21 bug fixes (rollout)
 
 Code landed in `DEV_CHANGES.md` 2026-04-21 entry. To finish rollout:

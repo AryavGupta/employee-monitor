@@ -30,19 +30,36 @@ const EFFECTIVE_STATUS_SQL = `
   END
 `;
 
+// Truncate at boundary so an oversized value can't break the INSERT (22001).
+// Older desktops won't send these; newer desktops send raw app.getVersion() /
+// os.release() which should already fit but we guard anyway.
+function truncOrNull(val, max) {
+  if (val == null) return null;
+  const s = String(val);
+  return s.length > max ? s.slice(0, max) : s;
+}
+
 // Heartbeat - Desktop app sends this every 30 seconds
 router.post('/heartbeat', authenticateToken, async (req, res) => {
   try {
-    const { status, currentApplication, windowTitle, currentUrl, sessionId, idleSeconds } = req.body;
+    const {
+      status, currentApplication, windowTitle, currentUrl, sessionId, idleSeconds,
+      app_version, os_platform, os_version
+    } = req.body;
     const userId = req.user.userId;
     const pool = req.app.locals.pool;
     const safeStatus = ALLOWED_PRESENCE_STATUSES.has(status) ? status : 'online';
+    // Length-guard at the boundary (per CLAUDE.md varchar-22001 rule).
+    const appVer = truncOrNull(app_version, 20);
+    const osPlat = truncOrNull(os_platform, 20);
+    const osVer  = truncOrNull(os_version,  50);
 
-    // Upsert user presence (with idle_seconds if column exists)
+    // Upsert user presence. COALESCE on client-meta so an older desktop that
+    // doesn't send these fields doesn't wipe last-known values on the row.
     try {
       await pool.query(`
-        INSERT INTO user_presence (user_id, status, current_application, current_window_title, current_url, session_id, last_heartbeat, idle_seconds)
-        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7)
+        INSERT INTO user_presence (user_id, status, current_application, current_window_title, current_url, session_id, last_heartbeat, idle_seconds, app_version, os_platform, os_version)
+        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7, $8, $9, $10)
         ON CONFLICT (user_id)
         DO UPDATE SET
           status = $2,
@@ -51,23 +68,47 @@ router.post('/heartbeat', authenticateToken, async (req, res) => {
           current_url = $5,
           session_id = $6,
           last_heartbeat = CURRENT_TIMESTAMP,
-          idle_seconds = $7
-      `, [userId, safeStatus, currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null, idleSeconds ?? 0]);
+          idle_seconds = $7,
+          app_version = COALESCE($8, user_presence.app_version),
+          os_platform = COALESCE($9, user_presence.os_platform),
+          os_version  = COALESCE($10, user_presence.os_version)
+      `, [userId, safeStatus, currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null, idleSeconds ?? 0, appVer, osPlat, osVer]);
     } catch (columnError) {
-      // Fallback if idle_seconds column doesn't exist yet
+      // Fallback: migration 004 not applied yet (missing app_version / os_* cols).
       if (columnError.code === '42703') {
-        await pool.query(`
-          INSERT INTO user_presence (user_id, status, current_application, current_window_title, current_url, session_id, last_heartbeat)
-          VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
-          ON CONFLICT (user_id)
-          DO UPDATE SET
-            status = $2,
-            current_application = $3,
-            current_window_title = $4,
-            current_url = $5,
-            session_id = $6,
-            last_heartbeat = CURRENT_TIMESTAMP
-        `, [userId, safeStatus, currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null]);
+        try {
+          await pool.query(`
+            INSERT INTO user_presence (user_id, status, current_application, current_window_title, current_url, session_id, last_heartbeat, idle_seconds)
+            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7)
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+              status = $2,
+              current_application = $3,
+              current_window_title = $4,
+              current_url = $5,
+              session_id = $6,
+              last_heartbeat = CURRENT_TIMESTAMP,
+              idle_seconds = $7
+          `, [userId, safeStatus, currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null, idleSeconds ?? 0]);
+        } catch (innerErr) {
+          // Deeper fallback: migration for idle_seconds also not applied.
+          if (innerErr.code === '42703') {
+            await pool.query(`
+              INSERT INTO user_presence (user_id, status, current_application, current_window_title, current_url, session_id, last_heartbeat)
+              VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+              ON CONFLICT (user_id)
+              DO UPDATE SET
+                status = $2,
+                current_application = $3,
+                current_window_title = $4,
+                current_url = $5,
+                session_id = $6,
+                last_heartbeat = CURRENT_TIMESTAMP
+            `, [userId, safeStatus, currentApplication || null, windowTitle || null, currentUrl || null, sessionId || null]);
+          } else {
+            throw innerErr;
+          }
+        }
       } else {
         throw columnError;
       }
@@ -126,6 +167,9 @@ router.get('/online', authenticateToken, authorizeAdminOrManager, async (req, re
         p.current_window_title,
         p.current_url,
         p.last_heartbeat,
+        p.app_version,
+        p.os_platform,
+        p.os_version,
         u.full_name,
         u.email,
         t.name as team_name,

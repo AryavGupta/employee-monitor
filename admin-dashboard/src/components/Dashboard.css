@@ -378,6 +378,13 @@
   font-size: 13px;
 }
 
+.emp-version,
+.emp-os {
+  color: #475569;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Status badges */
 .status-badge {
   display: inline-flex;
@@ -445,9 +452,22 @@
 @media (max-width: 768px) {
   .dash-stats-grid {
     grid-template-columns: 1fr;
+    gap: 12px;
   }
 
+  /* Keep search visible but let it wrap below the title */
   .header-right {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .search-box {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .header-avatar {
     display: none;
   }
 
@@ -455,11 +475,41 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
+    padding: 16px;
+  }
+
+  .dash-filter-tabs {
+    padding: 10px 16px;
+  }
+
+  .dash-table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dash-table {
+    min-width: 640px;
   }
 
   .dash-table td,
   .dash-table thead th {
     padding: 10px 14px;
+  }
+}
+
+/* Below 640px, drop the secondary columns to avoid extreme horizontal scroll.
+   Essentials (Employee, Status, Last Seen) stay. Admins who need App Version /
+   OS can still use a tablet or larger. */
+@media (max-width: 640px) {
+  .dash-table th:nth-child(3),
+  .dash-table th:nth-child(4),
+  .dash-table td:nth-child(3),
+  .dash-table td:nth-child(4) {
+    display: none;
+  }
+
+  .dash-table {
+    min-width: 0;
   }
 }
 
@@ -470,5 +520,15 @@
 
   .dash-stat-value {
     font-size: 24px;
+  }
+
+  .dash-stat-icon {
+    width: 38px;
+    height: 38px;
+  }
+
+  .dash-stat-icon svg {
+    width: 18px;
+    height: 18px;
   }
 }

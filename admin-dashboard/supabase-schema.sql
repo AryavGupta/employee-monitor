@@ -196,6 +196,12 @@ CREATE TABLE IF NOT EXISTS user_presence (
 -- Add idle_seconds to user_presence if not exists (migration for existing databases)
 ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS idle_seconds INTEGER DEFAULT 0;
 
+-- Desktop-client metadata (migration 004). Populated by the heartbeat; surfaced
+-- on the Dashboard employee table to spot stale installs.
+ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS app_version VARCHAR(20);
+ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS os_platform VARCHAR(20);
+ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS os_version  VARCHAR(50);
+
 -- Alert rules for automated alerts
 CREATE TABLE IF NOT EXISTS alert_rules (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

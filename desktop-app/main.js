@@ -55,6 +55,12 @@ const CONFIG = {
   TRACK_OUTSIDE_HOURS: false
 };
 
+// Grace period at shift end before switching to overtime mode. Users logging
+// out within this window produce ZERO overtime session — avoids the 0h 0m
+// extra-hours row we saw when a user clocks out exactly at shift_end
+// (Deepak 2026-04-23). User stays tracked as regular during the buffer.
+const OVERTIME_BUFFER_SECONDS = 30;
+
 // Token refresh state
 let isRefreshingToken = false;
 let refreshTokenPromise = null;
@@ -1214,13 +1220,19 @@ function getWorkingHoursStatus() {
   }
 
   const now = new Date();
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  // Second-resolution so OVERTIME_BUFFER_SECONDS (30s) is representable. Minute
+  // resolution (old implementation) could not distinguish 17:00:15 from 17:00:45,
+  // which the buffer logic needs to do.
+  const currentSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
 
   // Parse time strings (handle both 'HH:MM' and 'HH:MM:SS')
-  const [startH, startM] = CONFIG.WORKING_HOURS_START.split(':').map(Number);
-  const [endH, endM] = CONFIG.WORKING_HOURS_END.split(':').map(Number);
-  const startMinutes = startH * 60 + startM;
-  const endMinutes = endH * 60 + endM;
+  const startParts = CONFIG.WORKING_HOURS_START.split(':').map(Number);
+  const endParts = CONFIG.WORKING_HOURS_END.split(':').map(Number);
+  const startSec = (startParts[0] || 0) * 3600 + (startParts[1] || 0) * 60 + (startParts[2] || 0);
+  const endSec   = (endParts[0]   || 0) * 3600 + (endParts[1]   || 0) * 60 + (endParts[2]   || 0);
+  // Grace window extends shift end by OVERTIME_BUFFER_SECONDS so a user who
+  // logs out within this window never produces an overtime session.
+  const endSecGraced = endSec + OVERTIME_BUFFER_SECONDS;
 
   const todayStr = now.toISOString().split('T')[0];
   const yesterday = new Date(now);
@@ -1236,18 +1248,19 @@ function getWorkingHoursStatus() {
   let isWithinHours = false;
   let shiftDate = todayStr;
 
-  if (startMinutes <= endMinutes) {
-    // Normal shift (e.g., 09:00 - 17:00)
-    isWithinHours = currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  if (startSec <= endSec) {
+    // Normal shift (e.g., 09:00 - 17:00). Buffer extends the in-hours window.
+    isWithinHours = currentSec >= startSec && currentSec < endSecGraced;
     shiftDate = todayStr;
   } else {
-    // Night shift (e.g., 22:30 - 07:30) — crosses midnight
-    if (currentMinutes >= startMinutes) {
+    // Night shift (e.g., 22:30 - 07:30) — crosses midnight. Apply the same
+    // buffer symmetrically to the end side.
+    if (currentSec >= startSec) {
       // After start time, same calendar day (e.g., 23:00 when shift starts 22:30)
       isWithinHours = true;
       shiftDate = todayStr; // Shift started today
-    } else if (currentMinutes < endMinutes) {
-      // Before end time, shift started yesterday (e.g., 03:00 when shift ends 07:30)
+    } else if (currentSec < endSecGraced) {
+      // Before end+buffer, shift started yesterday
       isWithinHours = true;
       shiftDate = yesterdayStr; // Shift started yesterday
     } else {
@@ -2756,7 +2769,12 @@ async function sendHeartbeat() {
           current_application: appInfo.appName,
           current_window_title: appInfo.windowTitle,
           current_url: currentUrl,
-          idleSeconds: idleSeconds
+          idleSeconds: idleSeconds,
+          // Client metadata: lets the Dashboard show which version/OS each
+          // desktop is reporting, so we can spot stale installs.
+          app_version: app.getVersion(),
+          os_platform: process.platform,
+          os_version: os.release()
         },
         {
           headers: {
