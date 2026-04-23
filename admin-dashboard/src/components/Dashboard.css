@@ -378,11 +378,41 @@
   font-size: 13px;
 }
 
-.emp-version,
+.emp-version {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
 .emp-os {
   color: #475569;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+
+.os-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.os-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.os-icon.os-windows {
+  color: #3b82f6;
+}
+
+.os-icon.os-mac {
+  color: #64748b;
+}
+
+.os-icon.os-linux {
+  color: #f97316;
 }
 
 /* Status badges */

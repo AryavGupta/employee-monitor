@@ -1,5 +1,11 @@
 const PLATFORM_LABEL = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' };
 
+export function formatOsFull({ os_platform, os_version } = {}) {
+  if (!os_platform) return null;
+  const label = PLATFORM_LABEL[os_platform] || os_platform;
+  return os_version ? `${label} ${os_version}` : label;
+}
+
 export function formatOs({ os_platform, os_version } = {}) {
   if (!os_platform) return '—';
 

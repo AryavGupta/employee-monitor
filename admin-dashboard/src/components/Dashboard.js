@@ -3,7 +3,7 @@ import axios from 'axios';
 import { formatDistanceToNow } from 'date-fns';
 import Sidebar from './Sidebar';
 import { getStatusLabel, getStatusClassName, getStatusColor } from '../utils/statusHelpers';
-import { formatOs } from '../utils/clientMeta';
+import { formatOs, formatOsFull } from '../utils/clientMeta';
 import './Dashboard.css';
 
 const API_URL = process.env.REACT_APP_API_URL || '';
@@ -45,6 +45,20 @@ function Dashboard({ user, onLogout }) {
     document.addEventListener('visibilitychange', onVisible);
     return () => { clearInterval(interval); document.removeEventListener('visibilitychange', onVisible); };
   }, [fetchDashboardData]);
+
+  const getOsIcon = (platform) => {
+    if (!platform) return null;
+    if (platform === 'win32') return (
+      <svg className="os-icon os-windows" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+    );
+    if (platform === 'darwin') return (
+      <svg className="os-icon os-mac" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20.94c1.5 0 2.75 1.06 4 1.06 3 0 6-8 6-12.22A4.91 4.91 0 0 0 17 5c-2.22 0-4 1.44-5 2-1-.56-2.78-2-5-2a4.9 4.9 0 0 0-5 4.78C2 14 5 22 8 22c1.25 0 2.5-1.06 4-1.06z"/><path d="M10 2c1 .5 2 2 2 5"/></svg>
+    );
+    if (platform === 'linux') return (
+      <svg className="os-icon os-linux" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+    );
+    return null;
+  };
 
   const getStatusBadge = (status) => (
     <span className={`status-badge ${getStatusClassName(status)}`}>{getStatusLabel(status)}</span>
@@ -212,9 +226,11 @@ function Dashboard({ user, onLogout }) {
                           </div>
                         </div>
                       </td>
-                      <td className="emp-version">{emp.app_version ?? '—'}</td>
+                      <td className="emp-version">{emp.app_version ? `v${emp.app_version}` : '—'}</td>
                       <td>{getStatusBadge(emp.effective_status)}</td>
-                      <td className="emp-os">{formatOs(emp)}</td>
+                      <td className="emp-os" title={formatOsFull(emp)}>
+                        <span className="os-cell">{getOsIcon(emp.os_platform)}{formatOs(emp)}</span>
+                      </td>
                       <td className="emp-lastseen">
                         {emp.last_heartbeat
                           ? formatDistanceToNow(new Date(emp.last_heartbeat), { addSuffix: true })
