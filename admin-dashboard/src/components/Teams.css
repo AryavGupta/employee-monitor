@@ -809,13 +809,16 @@
 }
 
 /* Responsive */
-@media (max-width: 1024px) {
+@media (max-width: 1023.98px) {
+  /* Unbind the viewport-locked height so the page scrolls naturally on mobile/tablet */
   .teams-layout {
     grid-template-columns: 1fr;
+    height: auto;
+    gap: 16px;
   }
 
   .teams-list-panel {
-    max-height: 400px;
+    max-height: 360px;
   }
 
   .team-details-panel {
@@ -847,5 +850,9 @@
   .form-row input,
   .form-row select {
     width: 100%;
+  }
+
+  .teams-list-panel {
+    max-height: 280px;
   }
 }

@@ -811,14 +811,18 @@ h1, h2, h3, h4 {
   }
 }
 
-@media (max-width: 1024px) {
+/* Below 1024px the sidebar becomes an off-canvas drawer
+   (see Sidebar.css). Main content reclaims full width and
+   leaves room for the 56px fixed mobile top bar. */
+@media (max-width: 1023.98px) {
   .main-content {
     margin-left: 0;
-    padding: 24px;
+    padding: 20px;
+    padding-top: calc(56px + 20px);
   }
 
   .page-container {
-    padding: 20px;
+    padding: 0;
   }
 
   .content-header {
@@ -832,21 +836,19 @@ h1, h2, h3, h4 {
   }
 }
 
-@media (max-width: 640px) {
-  .stats-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .main-content {
-    padding: 16px;
-  }
-
-  .content-header h1 {
-    font-size: 22px;
-  }
-}
-
 @media (max-width: 768px) {
+  .modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .modal {
+    max-width: 100%;
+    width: 100%;
+    max-height: 95vh;
+    border-radius: 16px 16px 0 0;
+  }
+
   .modal-layout {
     flex-direction: column;
   }
@@ -856,19 +858,75 @@ h1, h2, h3, h4 {
     max-height: none;
     border-left: none;
     border-top: 1px solid #e2e8f0;
+    padding: 16px;
   }
 
   .modal-image-section {
-    max-height: 50vh;
+    max-height: 45vh;
+    padding: 16px;
+    min-height: 220px;
   }
 
   .screenshot-modal {
+    max-width: 100%;
     max-height: 95vh;
     overflow-y: auto;
+    border-radius: 16px 16px 0 0;
   }
 
   .stats-grid {
     grid-template-columns: 1fr;
+  }
+
+  .stat-card {
+    padding: 18px;
+  }
+
+  .stat-value {
+    font-size: 26px;
+  }
+
+  /* Tables scroll horizontally instead of breaking layout */
+  .table-container,
+  .users-table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table,
+  .users-table {
+    min-width: 560px;
+  }
+
+  .modal-footer {
+    flex-direction: column-reverse;
+  }
+
+  .modal-footer .btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .main-content {
+    padding: 16px;
+    padding-top: calc(56px + 14px);
+  }
+
+  .content-header h1 {
+    font-size: 22px;
+  }
+
+  .page-header h1 {
+    font-size: 24px;
+  }
+
+  .section {
+    padding: 18px;
+  }
+
+  .btn {
+    padding: 10px 16px;
   }
 }
 

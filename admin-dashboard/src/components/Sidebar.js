@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import './Sidebar.css';
 
@@ -89,10 +89,24 @@ const Icons = {
       <line x1="21" x2="9" y1="12" y2="12"/>
     </svg>
   ),
+  Menu: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="3" y1="6" x2="21" y2="6"/>
+      <line x1="3" y1="12" x2="21" y2="12"/>
+      <line x1="3" y1="18" x2="21" y2="18"/>
+    </svg>
+  ),
+  Close: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18"/>
+      <line x1="6" y1="6" x2="18" y2="18"/>
+    </svg>
+  ),
 };
 
 function Sidebar({ user, onLogout, activePage }) {
   const navigate = useNavigate();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleLogout = () => {
     if (window.confirm('Are you sure you want to logout?')) {
@@ -101,87 +115,137 @@ function Sidebar({ user, onLogout, activePage }) {
     }
   };
 
+  const closeDrawer = () => setMobileOpen(false);
+
+  useEffect(() => {
+    if (mobileOpen) {
+      document.body.classList.add('sidebar-drawer-open');
+    } else {
+      document.body.classList.remove('sidebar-drawer-open');
+    }
+    return () => document.body.classList.remove('sidebar-drawer-open');
+  }, [mobileOpen]);
+
   return (
-    <div className="sidebar">
-      <Link to="/dashboard" className="sidebar-header" style={{ textDecoration: 'none', color: 'inherit' }}>
-        <div className="sidebar-brand">
+    <>
+      {/* Mobile top bar — visible only below 1024px via CSS */}
+      <div className="mobile-topbar">
+        <button
+          className="mobile-menu-btn"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open menu"
+        >
+          <Icons.Menu />
+        </button>
+        <div className="mobile-topbar-brand">
           <div className="sidebar-logo">
             <Icons.Monitor />
           </div>
-          <h2>EmpMonitor</h2>
+          <span>EmpMonitor</span>
         </div>
-      </Link>
-
-      <nav className="sidebar-nav">
-        <div className="nav-section">
-          <div className="nav-section-label">Main Menu</div>
-
-          <Link to="/dashboard" className={`nav-item ${activePage === 'dashboard' ? 'active' : ''}`}>
-            <span className="nav-icon"><Icons.Dashboard /></span>
-            <span>Dashboard</span>
-          </Link>
-
-          {(user.role === 'admin' || user.role === 'team_manager') && (
-            <Link to="/user-activity" className={`nav-item ${activePage === 'user-activity' ? 'active' : ''}`}>
-              <span className="nav-icon"><Icons.Employees /></span>
-              <span>User Activity</span>
-            </Link>
-          )}
-
-          <Link to="/attendance-logs" className={`nav-item ${activePage === 'attendance-logs' ? 'active' : ''}`}>
-            <span className="nav-icon"><Icons.Attendance /></span>
-            <span>Attendance & Logs</span>
-          </Link>
-
-          <Link to="/screenshots" className={`nav-item ${activePage === 'screenshots' ? 'active' : ''}`}>
-            <span className="nav-icon"><Icons.Screenshots /></span>
-            <span>Screenshots</span>
-          </Link>
-
-          <Link to="/analytics" className={`nav-item ${activePage === 'analytics' ? 'active' : ''}`}>
-            <span className="nav-icon"><Icons.Analytics /></span>
-            <span>Analytics</span>
-          </Link>
-
-          {(user.role === 'admin' || user.role === 'team_manager') && (
-            <Link to="/teams" className={`nav-item ${activePage === 'teams' ? 'active' : ''}`}>
-              <span className="nav-icon"><Icons.Teams /></span>
-              <span>Teams</span>
-            </Link>
-          )}
-
-          {user.role === 'admin' && (
-            <Link to="/users" className={`nav-item ${activePage === 'users' ? 'active' : ''}`}>
-              <span className="nav-icon"><Icons.Users /></span>
-              <span>Users</span>
-            </Link>
-          )}
-
-          <Link to="/profile" className={`nav-item ${activePage === 'profile' ? 'active' : ''}`}>
-            <span className="nav-icon"><Icons.Settings /></span>
-            <span>Settings</span>
-          </Link>
-        </div>
-      </nav>
-
-      <div className="sidebar-footer">
-        <Link to="/profile" className="user-info-link">
-          <div className="user-info">
-            <div className="user-avatar">
-              {user.fullName?.charAt(0).toUpperCase()}
-            </div>
-            <div className="user-details">
-              <strong>{user.fullName}</strong>
-              <small>{user.role?.replace('_', ' ')}</small>
-            </div>
-          </div>
-        </Link>
-        <button className="logout-btn" onClick={handleLogout}>
-          <Icons.LogOut />
-          <span>Log out</span>
-        </button>
       </div>
-    </div>
+
+      {mobileOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={closeDrawer}
+          aria-hidden="true"
+        />
+      )}
+
+      <div className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}>
+        <Link
+          to="/dashboard"
+          className="sidebar-header"
+          style={{ textDecoration: 'none', color: 'inherit' }}
+          onClick={closeDrawer}
+        >
+          <div className="sidebar-brand">
+            <div className="sidebar-logo">
+              <Icons.Monitor />
+            </div>
+            <h2>EmpMonitor</h2>
+          </div>
+          <button
+            className="sidebar-close-btn"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeDrawer(); }}
+            aria-label="Close menu"
+          >
+            <Icons.Close />
+          </button>
+        </Link>
+
+        <nav className="sidebar-nav">
+          <div className="nav-section">
+            <div className="nav-section-label">Main Menu</div>
+
+            <Link to="/dashboard" className={`nav-item ${activePage === 'dashboard' ? 'active' : ''}`} onClick={closeDrawer}>
+              <span className="nav-icon"><Icons.Dashboard /></span>
+              <span>Dashboard</span>
+            </Link>
+
+            {(user.role === 'admin' || user.role === 'team_manager') && (
+              <Link to="/user-activity" className={`nav-item ${activePage === 'user-activity' ? 'active' : ''}`} onClick={closeDrawer}>
+                <span className="nav-icon"><Icons.Employees /></span>
+                <span>User Activity</span>
+              </Link>
+            )}
+
+            <Link to="/attendance-logs" className={`nav-item ${activePage === 'attendance-logs' ? 'active' : ''}`} onClick={closeDrawer}>
+              <span className="nav-icon"><Icons.Attendance /></span>
+              <span>Attendance & Logs</span>
+            </Link>
+
+            <Link to="/screenshots" className={`nav-item ${activePage === 'screenshots' ? 'active' : ''}`} onClick={closeDrawer}>
+              <span className="nav-icon"><Icons.Screenshots /></span>
+              <span>Screenshots</span>
+            </Link>
+
+            <Link to="/analytics" className={`nav-item ${activePage === 'analytics' ? 'active' : ''}`} onClick={closeDrawer}>
+              <span className="nav-icon"><Icons.Analytics /></span>
+              <span>Analytics</span>
+            </Link>
+
+            {(user.role === 'admin' || user.role === 'team_manager') && (
+              <Link to="/teams" className={`nav-item ${activePage === 'teams' ? 'active' : ''}`} onClick={closeDrawer}>
+                <span className="nav-icon"><Icons.Teams /></span>
+                <span>Teams</span>
+              </Link>
+            )}
+
+            {user.role === 'admin' && (
+              <Link to="/users" className={`nav-item ${activePage === 'users' ? 'active' : ''}`} onClick={closeDrawer}>
+                <span className="nav-icon"><Icons.Users /></span>
+                <span>Users</span>
+              </Link>
+            )}
+
+            <Link to="/profile" className={`nav-item ${activePage === 'profile' ? 'active' : ''}`} onClick={closeDrawer}>
+              <span className="nav-icon"><Icons.Settings /></span>
+              <span>Settings</span>
+            </Link>
+          </div>
+        </nav>
+
+        <div className="sidebar-footer">
+          <Link to="/profile" className="user-info-link" onClick={closeDrawer}>
+            <div className="user-info">
+              <div className="user-avatar">
+                {user.fullName?.charAt(0).toUpperCase()}
+              </div>
+              <div className="user-details">
+                <strong>{user.fullName}</strong>
+                <small>{user.role?.replace('_', ' ')}</small>
+              </div>
+            </div>
+          </Link>
+          <button className="logout-btn" onClick={handleLogout}>
+            <Icons.LogOut />
+            <span>Log out</span>
+          </button>
+        </div>
+      </div>
+    </>
   );
 }
 
