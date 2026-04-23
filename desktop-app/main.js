@@ -894,8 +894,17 @@ app.on('window-all-closed', () => {
 app.on('before-quit', async () => {
   if (CONFIG.USER_TOKEN && isTracking) {
     try {
+      // Order mirrors pauseTrackingForLogout: stop heartbeat FIRST so no
+      // interval tick can overwrite the logged_out status we're about to
+      // push. Then flush activity, close the session, and finally push the
+      // logged_out signal so the dashboard flips immediately instead of
+      // waiting on the 90s heartbeat-staleness gate. Without this push the
+      // Dashboard keeps showing the user as Active until the next poll
+      // after heartbeat goes stale — up to ~2 min mismatch vs UserActivity.
+      stopHeartbeat();
       await sendActivityBatch();
       await endWorkSession();
+      await pushLoggedOutSignal();
     } catch (e) {
       console.log('Cleanup on quit failed:', e.message);
     }
