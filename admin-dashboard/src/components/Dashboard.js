@@ -189,8 +189,8 @@ function Dashboard({ user, onLogout }) {
               <thead>
                 <tr>
                   <th>Employee</th>
-                  <th>Status</th>
                   <th>App Version</th>
+                  <th>Status</th>
                   <th>OS</th>
                   <th>Last Seen</th>
                 </tr>
@@ -212,8 +212,8 @@ function Dashboard({ user, onLogout }) {
                           </div>
                         </div>
                       </td>
-                      <td>{getStatusBadge(emp.effective_status)}</td>
                       <td className="emp-version">{emp.app_version ?? '—'}</td>
+                      <td>{getStatusBadge(emp.effective_status)}</td>
                       <td className="emp-os">{formatOs(emp)}</td>
                       <td className="emp-lastseen">
                         {emp.last_heartbeat

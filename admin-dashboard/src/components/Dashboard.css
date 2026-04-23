@@ -78,7 +78,7 @@
 
 .dash-stat-card {
   padding: 22px 20px;
-  border-radius: 14px;
+  border-radius: 12px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -174,7 +174,7 @@
 
 .dash-section {
   background: white;
-  border-radius: 14px;
+  border-radius: 12px;
   border: 1px solid #e2e8f0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   overflow: hidden;
@@ -185,7 +185,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 20px 24px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
 }
 
 .dash-section-header h2 {
@@ -497,13 +497,12 @@
   }
 }
 
-/* Below 640px, drop the secondary columns to avoid extreme horizontal scroll.
-   Essentials (Employee, Status, Last Seen) stay. Admins who need App Version /
-   OS can still use a tablet or larger. */
+/* Below 640px, hide App Version (col 2) and OS (col 4).
+   Essentials (Employee, Status, Last Seen) stay visible. */
 @media (max-width: 640px) {
-  .dash-table th:nth-child(3),
+  .dash-table th:nth-child(2),
   .dash-table th:nth-child(4),
-  .dash-table td:nth-child(3),
+  .dash-table td:nth-child(2),
   .dash-table td:nth-child(4) {
     display: none;
   }
