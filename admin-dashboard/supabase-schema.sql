@@ -201,6 +201,11 @@ ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS idle_seconds INTEGER DEFAULT 
 ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS app_version VARCHAR(20);
 ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS os_platform VARCHAR(20);
 ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS os_version  VARCHAR(50);
+ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS ip_address  VARCHAR(45);
+-- Local/LAN IP reported by the desktop app (migration 005). ip_address is the
+-- public IP derived from x-forwarded-for; local_ip complements it for teams
+-- behind the same NAT.
+ALTER TABLE user_presence ADD COLUMN IF NOT EXISTS local_ip    VARCHAR(45);
 
 -- Alert rules for automated alerts
 CREATE TABLE IF NOT EXISTS alert_rules (

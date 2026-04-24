@@ -1,12 +1,5 @@
 /* Dashboard.css - Redesigned Dashboard */
 
-/* Header */
-.content-subtitle {
-  font-size: 14px;
-  color: #64748b;
-  margin-top: 2px;
-}
-
 .header-right {
   display: flex;
   align-items: center;
@@ -51,11 +44,38 @@
   color: #94a3b8;
 }
 
+.header-bell {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #475569;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+
+.header-bell:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.header-bell svg {
+  width: 18px;
+  height: 18px;
+}
+
 .header-avatar {
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  background: #6366f1;
+  background: #3b82f6;
   color: white;
   display: flex;
   align-items: center;
@@ -273,14 +293,29 @@
 }
 
 .dash-filter-tab.active {
-  background: #0f172a;
+  background: #3b82f6;
   color: white;
-  border-color: #0f172a;
+  border-color: #3b82f6;
 }
 
 .dash-filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+  padding: 1px 8px;
+  border-radius: 10px;
   font-size: 12px;
-  opacity: 0.7;
+  font-weight: 500;
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+}
+
+.dash-filter-tab.active .dash-filter-count {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border-color: transparent;
 }
 
 /* ============================================
@@ -415,6 +450,49 @@
   color: #f97316;
 }
 
+.emp-ip {
+  color: #64748b;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+}
+
+.ip-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ip-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ip-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: 'Inter', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.ip-tag.public {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.ip-val {
+  color: #334155;
+}
+
 /* Status badges */
 .status-badge {
   display: inline-flex;
@@ -497,7 +575,8 @@
     width: 100%;
   }
 
-  .header-avatar {
+  .header-avatar,
+  .header-bell {
     display: none;
   }
 
@@ -527,13 +606,15 @@
   }
 }
 
-/* Below 640px, hide App Version (col 2) and OS (col 4).
+/* Below 640px, hide App Version (col 2), OS (col 4), IP (col 5).
    Essentials (Employee, Status, Last Seen) stay visible. */
 @media (max-width: 640px) {
   .dash-table th:nth-child(2),
   .dash-table th:nth-child(4),
+  .dash-table th:nth-child(5),
   .dash-table td:nth-child(2),
-  .dash-table td:nth-child(4) {
+  .dash-table td:nth-child(4),
+  .dash-table td:nth-child(5) {
     display: none;
   }
 

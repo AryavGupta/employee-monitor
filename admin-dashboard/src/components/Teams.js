@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import axios from 'axios';
 import Sidebar from './Sidebar';
+import Toast from './Toast';
 import { useUsers } from '../hooks/useUsers';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import { getStatusColor as sharedStatusColor } from '../utils/statusHelpers';
@@ -18,21 +19,25 @@ function Teams({ user, onLogout }) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [editingTeam, setEditingTeam] = useState(null);
-  useBodyScrollLock(showCreateModal || showAddMemberModal || !!editingTeam);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [removingMember, setRemovingMember] = useState(null);
+  const [toast, setToast] = useState({ message: '', type: 'success' });
+  useBodyScrollLock(showCreateModal || showAddMemberModal || !!editingTeam || !!removingMember);
 
   useEffect(() => {
     const handleEsc = (e) => {
       if (e.key === 'Escape') {
-        if (showCreateModal) setShowCreateModal(false);
+        if (removingMember) setRemovingMember(null);
+        else if (showCreateModal) setShowCreateModal(false);
         else if (editingTeam) setEditingTeam(null);
-        else if (showAddMemberModal) setShowAddMemberModal(false);
+        else if (showAddMemberModal) { setShowAddMemberModal(false); setMemberSearch(''); }
       }
     };
-    if (showCreateModal || editingTeam || showAddMemberModal) {
+    if (showCreateModal || editingTeam || showAddMemberModal || removingMember) {
       document.addEventListener('keydown', handleEsc);
       return () => document.removeEventListener('keydown', handleEsc);
     }
-  }, [showCreateModal, editingTeam, showAddMemberModal]);
+  }, [showCreateModal, editingTeam, showAddMemberModal, removingMember]);
 
   // Create form defaults: text fields empty (admin fills per-team), numeric
   // intervals empty (server applies schema defaults), tracking checkboxes all
@@ -54,6 +59,24 @@ function Teams({ user, onLogout }) {
     if (!q) return teams;
     return teams.filter(t => (t.name || '').toLowerCase().includes(q));
   }, [teams, teamSearch]);
+
+  const filteredUnassigned = useMemo(() => {
+    const q = memberSearch.trim().toLowerCase();
+    if (!q) return unassignedUsers;
+    return unassignedUsers.filter(u =>
+      (u.full_name || '').toLowerCase().includes(q) ||
+      (u.email || '').toLowerCase().includes(q)
+    );
+  }, [unassignedUsers, memberSearch]);
+
+  const avatarColors = ['#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#3B82F6', '#EF4444', '#14B8A6', '#F97316'];
+  const getAvatarColor = (name) => {
+    let hash = 0;
+    for (let i = 0; i < (name || '').length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    return avatarColors[Math.abs(hash) % avatarColors.length];
+  };
+
+  const showToast = (message, type = 'success') => setToast({ message, type });
 
   const fetchTeams = useCallback(async () => {
     try {
@@ -165,7 +188,7 @@ function Teams({ user, onLogout }) {
         fetchTeams();
       }
     } catch (error) {
-      alert(error.response?.data?.message || 'Failed to create team');
+      showToast(error.response?.data?.message || 'Failed to create team', 'error');
     }
   };
 
@@ -205,8 +228,9 @@ function Teams({ user, onLogout }) {
         promises.push(fetchTeamDetails(teamId));
       }
       await Promise.all(promises);
+      showToast('Team settings updated successfully', 'success');
     } catch (error) {
-      alert(error.response?.data?.message || 'Failed to update team');
+      showToast(error.response?.data?.message || 'Failed to update team', 'error');
     }
   };
 
@@ -222,13 +246,15 @@ function Teams({ user, onLogout }) {
         if (selectedTeam?.id === teamId) {
           setSelectedTeam(null);
         }
+        showToast('Team deleted successfully', 'warning');
       }
     } catch (error) {
-      alert(error.response?.data?.message || 'Failed to delete team');
+      showToast(error.response?.data?.message || 'Failed to delete team', 'error');
     }
   };
 
   const handleAddMember = async (userId) => {
+    const addedUser = unassignedUsers.find(u => u.id === userId);
     try {
       const token = localStorage.getItem('token');
       await axios.post(
@@ -236,31 +262,39 @@ function Teams({ user, onLogout }) {
         { user_id: userId },
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      // Parallel refetch instead of 3 sequential calls
       await Promise.all([
         fetchTeamDetails(selectedTeam.id),
         fetchUnassignedUsers(),
         fetchTeams()
       ]);
+      showToast(`${addedUser?.full_name || 'Member'} added to the team`, 'info');
     } catch (error) {
-      alert(error.response?.data?.message || 'Failed to add member');
+      showToast(error.response?.data?.message || 'Failed to add member', 'error');
     }
   };
 
-  const handleRemoveMember = async (userId) => {
-    if (!window.confirm('Remove this member from the team?')) return;
+  const confirmRemoveMember = (member) => {
+    setRemovingMember(member);
+  };
+
+  const handleRemoveMember = async () => {
+    if (!removingMember) return;
+    const memberName = removingMember.full_name;
     try {
       const token = localStorage.getItem('token');
-      await axios.delete(`${API_URL}/api/teams/${selectedTeam.id}/members/${userId}`, {
+      await axios.delete(`${API_URL}/api/teams/${selectedTeam.id}/members/${removingMember.id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      // Parallel refetch instead of 2 sequential calls
+      setRemovingMember(null);
       await Promise.all([
         fetchTeamDetails(selectedTeam.id),
+        fetchUnassignedUsers(),
         fetchTeams()
       ]);
+      showToast(`${memberName} removed from team`, 'warning');
     } catch (error) {
-      alert(error.response?.data?.message || 'Failed to remove member');
+      setRemovingMember(null);
+      showToast(error.response?.data?.message || 'Failed to remove member', 'error');
     }
   };
 
@@ -288,12 +322,13 @@ function Teams({ user, onLogout }) {
       });
     } catch (error) {
       console.error('Error loading team settings:', error);
-      alert('Failed to load team settings');
+      showToast('Failed to load team settings', 'error');
     }
   };
 
   const openAddMemberModal = (team) => {
     setSelectedTeam(team);
+    setMemberSearch('');
     fetchUnassignedUsers();
     setShowAddMemberModal(true);
   };
@@ -399,10 +434,13 @@ function Teams({ user, onLogout }) {
                     <h3>{selectedTeam.name}</h3>
                     {user.role === 'admin' && (
                       <button
-                        className="btn-secondary"
+                        className="btn-add-member"
                         onClick={() => openAddMemberModal(selectedTeam)}
                       >
-                        + Add Member
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Add Member
                       </button>
                     )}
                   </div>
@@ -439,34 +477,46 @@ function Teams({ user, onLogout }) {
                     ) : selectedTeam.members.length === 0 ? (
                       <div className="empty-state">No members in this team</div>
                     ) : (
-                      selectedTeam.members.map(member => (
-                        <div key={member.id} className="member-item">
-                          <div className="member-status">
-                            <span
-                              className="status-dot"
-                              style={{ backgroundColor: getStatusColor(member.presence_status) }}
-                            ></span>
-                          </div>
-                          <div className="member-info">
-                            <strong>{member.full_name}</strong>
-                            <span className="member-email">{member.email}</span>
-                            {member.current_application && (
-                              <span className="current-app">{member.current_application}</span>
-                            )}
-                          </div>
-                          <div className="member-meta">
-                            <span className={`role-badge ${member.role}`}>{member.role}</span>
-                            {user.role === 'admin' && (
-                              <button
-                                className="remove-btn"
-                                onClick={() => handleRemoveMember(member.id)}
-                              >
-                                Remove
-                              </button>
-                            )}
-                          </div>
+                      <>
+                        <div className="member-row member-header">
+                          <div className="member-col-name">Name</div>
+                          <div className="member-col-email">Email</div>
+                          <div className="member-col-role">Role</div>
+                          <div className="member-col-action">Action</div>
                         </div>
-                      ))
+                        {selectedTeam.members.map(member => (
+                          <div key={member.id} className="member-row">
+                            <div className="member-col-name">
+                              <span
+                                className="member-avatar"
+                                style={{ backgroundColor: getStatusColor(member.presence_status) }}
+                              >
+                                {member.full_name?.charAt(0).toUpperCase()}
+                              </span>
+                              <div className="member-name-wrap">
+                                <strong>{member.full_name}</strong>
+                                {member.current_application && (
+                                  <span className="current-app">{member.current_application}</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="member-col-email">{member.email}</div>
+                            <div className="member-col-role">
+                              <span className={`role-badge ${member.role}`}>{member.role}</span>
+                            </div>
+                            <div className="member-col-action">
+                              {user.role === 'admin' && (
+                                <button
+                                  className="remove-btn"
+                                  onClick={() => confirmRemoveMember(member)}
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </>
                     )}
                   </div>
                 </>
@@ -662,29 +712,45 @@ function Teams({ user, onLogout }) {
 
         {/* Add Member Modal */}
         {showAddMemberModal && (
-          <div className="modal-overlay" onClick={() => setShowAddMemberModal(false)}>
-            <div className="modal" onClick={e => e.stopPropagation()}>
+          <div className="modal-overlay" onClick={() => { setShowAddMemberModal(false); setMemberSearch(''); }}>
+            <div className="modal add-member-modal" onClick={e => e.stopPropagation()}>
               <div className="modal-header">
                 <div className="modal-header-left">
                   <h2>Add Members</h2>
                   <p>Add members to {selectedTeam?.name}</p>
                 </div>
-                <button type="button" className="modal-close-btn" onClick={() => setShowAddMemberModal(false)}>&times;</button>
+                <button type="button" className="modal-close-btn" onClick={() => { setShowAddMemberModal(false); setMemberSearch(''); }}>&times;</button>
+              </div>
+              <div className="add-member-search">
+                <div className="search-input-wrap">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                  <input
+                    type="text"
+                    placeholder="Search users by name or email..."
+                    value={memberSearch}
+                    onChange={e => setMemberSearch(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+                <span className="user-count">{filteredUnassigned.length} unassigned user{filteredUnassigned.length !== 1 ? 's' : ''} available</span>
               </div>
               <div className="unassigned-users-list">
-                {unassignedUsers.length === 0 ? (
-                  <div className="empty-state">No unassigned users available</div>
+                {filteredUnassigned.length === 0 ? (
+                  <div className="empty-state">{memberSearch ? 'No users match your search' : 'No unassigned users available'}</div>
                 ) : (
-                  unassignedUsers.map(u => (
+                  filteredUnassigned.map(u => (
                     <div key={u.id} className="unassigned-user-item">
-                      <div className="user-info">
-                        <strong>{u.full_name}</strong>
-                        <span>{u.email}</span>
+                      <div className="user-info-row">
+                        <span className="user-avatar-sm" style={{ backgroundColor: getAvatarColor(u.full_name) }}>
+                          {(u.full_name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                        </span>
+                        <div className="user-info">
+                          <strong>{u.full_name}</strong>
+                          <span>{u.email}</span>
+                        </div>
                       </div>
-                      <button
-                        className="btn-secondary"
-                        onClick={() => handleAddMember(u.id)}
-                      >
+                      <button className="btn-add-sm" onClick={() => handleAddMember(u.id)}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                         Add
                       </button>
                     </div>
@@ -692,11 +758,32 @@ function Teams({ user, onLogout }) {
                 )}
               </div>
               <div className="modal-actions">
-                <button type="button" onClick={() => setShowAddMemberModal(false)}>Close</button>
+                <button type="button" onClick={() => { setShowAddMemberModal(false); setMemberSearch(''); }}>Close</button>
               </div>
             </div>
           </div>
         )}
+
+        {/* Remove Member Confirmation */}
+        {removingMember && (
+          <div className="modal-overlay" onClick={() => setRemovingMember(null)}>
+            <div className="confirm-dialog" onClick={e => e.stopPropagation()}>
+              <div className="confirm-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>
+                </svg>
+              </div>
+              <h3>Remove Team Member</h3>
+              <p>Are you sure you want to remove <strong>{removingMember.full_name}</strong> from <strong>{selectedTeam?.name}</strong>? This action cannot be undone.</p>
+              <div className="confirm-actions">
+                <button className="btn-secondary" onClick={() => setRemovingMember(null)}>Cancel</button>
+                <button className="btn-danger" onClick={handleRemoveMember}>Remove Member</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'success' })} />
       </div>
     </div>
   );

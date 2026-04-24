@@ -2753,6 +2753,29 @@ async function sendActivityBatch() {
 // Heartbeat for Real-time Presence
 // =====================================================
 
+// Pick the primary LAN IPv4 — first non-internal address across active
+// interfaces. Falls back to IPv6 if no IPv4 is present, or null on a
+// disconnected machine. We send this in the heartbeat so the dashboard can
+// show both local (LAN) and public IPs — the server captures the public IP
+// from x-forwarded-for, which is identical for every user behind the same
+// corporate NAT.
+function getLocalIp() {
+  try {
+    const interfaces = os.networkInterfaces();
+    let fallback = null;
+    for (const name of Object.keys(interfaces)) {
+      for (const addr of interfaces[name] || []) {
+        if (addr.internal) continue;
+        if (addr.family === 'IPv4' || addr.family === 4) return addr.address;
+        if (!fallback && (addr.family === 'IPv6' || addr.family === 6)) fallback = addr.address;
+      }
+    }
+    return fallback;
+  } catch {
+    return null;
+  }
+}
+
 async function sendHeartbeat() {
   // Gate on policy: no heartbeat when paused. An "idle" heartbeat while
   // the team has track_outside_hours=false makes the user appear online
@@ -2783,7 +2806,8 @@ async function sendHeartbeat() {
           // desktop is reporting, so we can spot stale installs.
           app_version: app.getVersion(),
           os_platform: process.platform,
-          os_version: os.release()
+          os_version: os.release(),
+          local_ip: getLocalIp()
         },
         {
           headers: {

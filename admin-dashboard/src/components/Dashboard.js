@@ -120,6 +120,12 @@ function Dashboard({ user, onLogout }) {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
+            <button className="header-bell" aria-label="Notifications" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+              </svg>
+            </button>
             <div className="header-avatar">
               {user.fullName?.charAt(0).toUpperCase()}
             </div>
@@ -193,7 +199,7 @@ function Dashboard({ user, onLogout }) {
                 className={`dash-filter-tab ${statusFilter === tab.key ? 'active' : ''}`}
                 onClick={() => setStatusFilter(tab.key)}
               >
-                {tab.label} <span className="dash-filter-count">({statusCounts[tab.key] ?? 0})</span>
+                {tab.label}<span className="dash-filter-count">{statusCounts[tab.key] ?? 0}</span>
               </button>
             ))}
           </div>
@@ -206,12 +212,13 @@ function Dashboard({ user, onLogout }) {
                   <th>App Version</th>
                   <th>Status</th>
                   <th>OS</th>
+                  <th>IP Address</th>
                   <th>Last Seen</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredEmployees.length === 0 ? (
-                  <tr><td colSpan="5" className="dash-empty">No employees found</td></tr>
+                  <tr><td colSpan="6" className="dash-empty">No employees found</td></tr>
                 ) : (
                   filteredEmployees.map((emp) => (
                     <tr key={emp.user_id}>
@@ -230,6 +237,18 @@ function Dashboard({ user, onLogout }) {
                       <td>{getStatusBadge(emp.effective_status)}</td>
                       <td className="emp-os" title={formatOsFull(emp)}>
                         <span className="os-cell">{getOsIcon(emp.os_platform)}{formatOs(emp)}</span>
+                      </td>
+                      <td className="emp-ip">
+                        <div className="ip-cell">
+                          <span className="ip-row">
+                            <span className="ip-tag">LAN</span>
+                            <span className="ip-val">{emp.local_ip || '—'}</span>
+                          </span>
+                          <span className="ip-row">
+                            <span className="ip-tag public">WAN</span>
+                            <span className="ip-val">{emp.ip_address || '—'}</span>
+                          </span>
+                        </div>
                       </td>
                       <td className="emp-lastseen">
                         {emp.last_heartbeat
