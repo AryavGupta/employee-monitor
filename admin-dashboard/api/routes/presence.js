@@ -205,7 +205,19 @@ router.get('/online', authenticateToken, authorizeAdminOrManager, async (req, re
 
     query += ` ORDER BY p.last_heartbeat DESC`;
 
-    const result = await pool.query(query, params);
+    let result;
+    try {
+      result = await pool.query(query, params);
+    } catch (columnError) {
+      // Migration 005 not applied yet on this environment → p.local_ip missing.
+      // Retry without it so the dashboard keeps rendering rows (local_ip is optional).
+      if (columnError.code === '42703') {
+        const fallbackQuery = query.replace(/\s+p\.local_ip,/, '');
+        result = await pool.query(fallbackQuery, params);
+      } else {
+        throw columnError;
+      }
+    }
     res.json({ success: true, data: result.rows });
   } catch (error) {
     console.error('Get online users error:', error);
