@@ -1,138 +1,5 @@
 /* Screenshots.css - Redesigned Screenshots Page */
 
-/* Header extras */
-.header-user-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: #475569;
-}
-
-.header-avatar {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  background: #6366f1;
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 600;
-  font-size: 15px;
-  flex-shrink: 0;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-/* User Selection */
-.user-selection-section {
-  background: white;
-  padding: 20px;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
-  margin-bottom: 24px;
-}
-
-.user-selection-section > label {
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
-}
-
-.user-search-container {
-  position: relative;
-}
-
-.user-search-input {
-  width: 100%;
-  padding: 12px 16px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 14px;
-  color: #0f172a;
-  background: white;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  box-sizing: border-box;
-}
-
-.user-search-input:focus {
-  outline: none;
-  border-color: #0f172a;
-  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08);
-}
-
-.user-search-input::placeholder {
-  color: #94a3b8;
-}
-
-.user-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
-  max-height: 300px;
-  overflow-y: auto;
-  z-index: 100;
-  margin-top: 4px;
-}
-
-.user-dropdown-empty {
-  padding: 16px;
-  text-align: center;
-  color: #64748b;
-  font-size: 14px;
-}
-
-.user-dropdown-item {
-  padding: 12px 16px;
-  cursor: pointer;
-  transition: background 0.15s ease;
-  border-bottom: 1px solid #f1f5f9;
-}
-
-.user-dropdown-item:last-child { border-bottom: none; }
-.user-dropdown-item:hover { background: #f8fafc; }
-.user-dropdown-item.selected { background: #f1f5f9; }
-
-.user-dropdown-item strong {
-  display: block;
-  font-size: 14px;
-  font-weight: 500;
-  color: #0f172a;
-}
-
-.user-dropdown-item span {
-  display: block;
-  font-size: 12px;
-  color: #64748b;
-  margin-top: 2px;
-}
-
-/* Select User Prompt */
-.select-user-prompt {
-  background: white;
-  border: 2px dashed #e2e8f0;
-  border-radius: 12px;
-  padding: 60px 40px;
-  text-align: center;
-  color: #64748b;
-}
-
-.select-user-prompt .prompt-icon { font-size: 48px; margin-bottom: 16px; }
-.select-user-prompt h3 { font-size: 18px; font-weight: 600; color: #0f172a; margin: 0 0 8px; }
-.select-user-prompt p { font-size: 14px; margin: 0; color: #64748b; }
-
 /* ============================================
    STATS TABS
    ============================================ */
@@ -260,7 +127,7 @@
 
 .screenshots-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: 20px;
 }
 
@@ -371,9 +238,9 @@
 .screenshot-modal {
   background: white;
   border-radius: 16px;
-  max-width: 1000px;
+  max-width: 1200px;
   width: 100%;
-  max-height: 85vh;
+  max-height: 90vh;
   position: relative;
   overflow: hidden;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
@@ -409,19 +276,19 @@
 
 .modal-image-section {
   flex: 1;
-  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 24px;
-  min-height: 300px;
-  max-height: 85vh;
+  padding: 32px;
+  min-height: 400px;
+  max-height: 90vh;
 }
 
 .modal-screenshot {
   max-width: 100%;
-  max-height: calc(85vh - 100px);
+  max-height: calc(90vh - 100px);
   object-fit: contain;
   border-radius: 8px;
   cursor: zoom-in;
@@ -477,15 +344,19 @@
 }
 
 .nav-prev { left: 20px; }
-.nav-next { right: 360px; }
+.nav-next { right: 320px; }
 
 .modal-info-section {
-  width: 340px;
-  padding: 28px;
+  width: 300px;
+  min-width: 0;
+  padding: 24px;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  max-height: 85vh;
+  overflow-x: hidden;
+  max-height: 90vh;
+  flex-shrink: 0;
+  border-left: 1px solid #e2e8f0;
 }
 
 .modal-info-section h3 {
@@ -512,9 +383,12 @@
 }
 
 .info-list .info-item span {
+  display: block;
   font-size: 14px;
   color: #0f172a;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
+  max-width: 100%;
 }
 
 .status-badge {
@@ -604,21 +478,44 @@
 
 .lightbox-close:hover { background: #f8fafc; }
 
-/* No Data */
-.no-data {
+/* No Screenshots Found */
+.no-screenshots {
   grid-column: 1 / -1;
   text-align: center;
-  padding: 48px 24px;
-  color: #64748b;
+  padding: 60px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: white;
+  border: 2px dashed #e2e8f0;
+  border-radius: 16px;
+}
+
+.no-screenshots h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 0 0 8px;
+}
+
+.no-screenshots p {
   font-size: 14px;
+  color: #64748b;
+  margin: 0;
+  max-width: 340px;
 }
 
 /* ============================================
    RESPONSIVE
    ============================================ */
 
+@media (max-width: 1400px) {
+  .screenshots-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
 @media (max-width: 1024px) {
   .nav-next { right: 20px; }
+  .screenshots-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 768px) {
@@ -632,6 +529,15 @@
   .nav-prev { left: 10px; }
   .nav-next { right: 10px; }
   .modal-footer { flex-direction: column; gap: 8px; }
-  .screenshots-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
   .stats-tabs { flex-wrap: wrap; }
+  .stats-tabs { gap: 8px; }
+  .user-selection-section { padding: 16px; }
+  .select-user-prompt { padding: 40px 20px; }
+}
+
+@media (max-width: 480px) {
+  .screenshots-grid { grid-template-columns: 1fr; }
+  .screenshot-thumbnail { height: 200px; }
+  .stats-tab { padding: 8px 14px; font-size: 13px; }
+  .stats-tab strong { font-size: 15px; }
 }

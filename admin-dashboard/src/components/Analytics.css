@@ -11,12 +11,7 @@
   min-height: 100vh;
 }
 
-.content-subtitle-right {
-  font-size: 14px;
-  color: #6366f1;
-  font-weight: 500;
-  margin: 0;
-}
+/* content-subtitle is defined in App.css (shared) */
 
 /* ============================================
    FILTERS BAR
@@ -337,155 +332,7 @@
   grid-column: span 2;
 }
 
-/* ============================================
-   USER SELECTION
-   ============================================ */
-
-.user-selection-section {
-  background: white;
-  padding: 16px 20px;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
-  margin-bottom: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-}
-
-.user-selection-section label {
-  display: block;
-  font-size: 11px;
-  font-weight: 600;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  margin-bottom: 8px;
-}
-
-.user-search-container {
-  position: relative;
-}
-
-.user-search-input {
-  width: 100%;
-  padding: 10px 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 14px;
-  background: #f8fafc;
-  color: #0f172a;
-  transition: all 0.2s ease;
-  box-sizing: border-box;
-}
-
-.user-search-input:hover {
-  border-color: #cbd5e1;
-  background: white;
-}
-
-.user-search-input:focus {
-  outline: none;
-  border-color: #3b82f6;
-  background: white;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-
-.user-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
-  z-index: 100;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.user-option {
-  padding: 14px 18px;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  border-bottom: 1px solid #f1f5f9;
-  transition: all 0.15s ease;
-}
-
-.user-option:last-child {
-  border-bottom: none;
-}
-
-.user-option:hover {
-  background: #f8fafc;
-}
-
-.user-option.selected {
-  background: #eff6ff;
-}
-
-.user-option .user-name {
-  font-weight: 600;
-  color: #0f172a;
-  font-size: 15px;
-}
-
-.user-option .user-email {
-  font-size: 13px;
-  color: #64748b;
-}
-
-.no-users {
-  padding: 24px;
-  text-align: center;
-  color: #94a3b8;
-  font-size: 14px;
-}
-
-/* ============================================
-   SELECT USER PROMPT
-   ============================================ */
-
-.select-user-prompt {
-  background: white;
-  border-radius: 20px;
-  border: 1px solid #e2e8f0;
-  padding: 80px 40px;
-  text-align: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-}
-
-.select-user-prompt .prompt-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 80px;
-  height: 80px;
-  margin: 0 auto 24px auto;
-  background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
-  border-radius: 20px;
-  color: #64748b;
-}
-
-.select-user-prompt .prompt-icon svg {
-  width: 40px;
-  height: 40px;
-}
-
-.select-user-prompt h2 {
-  margin: 0 0 12px 0;
-  font-size: 26px;
-  font-weight: 700;
-  color: #0f172a;
-  letter-spacing: -0.02em;
-}
-
-.select-user-prompt p {
-  margin: 0;
-  color: #64748b;
-  font-size: 16px;
-  line-height: 1.5;
-}
+/* User selection & empty state styles are in App.css (shared) */
 
 /* ============================================
    DAILY BREAKDOWN TABLE
@@ -722,10 +569,6 @@
 
   .select-user-prompt {
     padding: 60px 24px;
-  }
-
-  .select-user-prompt h2 {
-    font-size: 22px;
   }
 }
 

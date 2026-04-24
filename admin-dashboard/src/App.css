@@ -105,6 +105,12 @@ h1, h2, h3, h4 {
   margin: 0;
 }
 
+.content-subtitle {
+  font-size: 14px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
 /* Loading States */
 .loading-screen {
   display: flex;
@@ -487,9 +493,9 @@ h1, h2, h3, h4 {
 .screenshot-modal {
   background: white;
   border-radius: 16px;
-  max-width: 1000px;
+  max-width: 1200px;
   width: 100%;
-  max-height: 85vh;
+  max-height: 90vh;
   position: relative;
   overflow: hidden;
 }
@@ -501,19 +507,19 @@ h1, h2, h3, h4 {
 
 .modal-image-section {
   flex: 1;
-  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 24px;
-  min-height: 300px;
-  max-height: 85vh;
+  padding: 32px;
+  min-height: 400px;
+  max-height: 90vh;
 }
 
 .modal-screenshot {
   max-width: 100%;
-  max-height: calc(85vh - 100px);
+  max-height: calc(90vh - 100px);
   object-fit: contain;
   border-radius: 8px;
   cursor: zoom-in;
@@ -531,12 +537,13 @@ h1, h2, h3, h4 {
 }
 
 .modal-info-section {
-  width: 320px;
+  width: 300px;
   padding: 24px;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  max-height: 85vh;
+  max-height: 90vh;
+  flex-shrink: 0;
   border-left: 1px solid #e2e8f0;
 }
 
@@ -928,6 +935,14 @@ h1, h2, h3, h4 {
   .btn {
     padding: 10px 16px;
   }
+
+  .user-selection-section {
+    padding: 16px;
+  }
+
+  .select-user-prompt {
+    padding: 48px 20px;
+  }
 }
 
 /* ============================================
@@ -981,4 +996,143 @@ h1, h2, h3, h4 {
 .btn-refresh.btn-refresh-sm {
   padding: 6px 8px;
   gap: 0;
+}
+
+/* ============================================
+   SHARED: User Selection + Empty State
+   Used by Screenshots, Analytics, Attendance & Logs
+   ============================================ */
+
+.user-selection-section {
+  background: white;
+  padding: 20px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 24px;
+}
+
+.user-selection-section > label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.user-search-container {
+  position: relative;
+}
+
+.user-search-input {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #0f172a;
+  background: white;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+}
+
+.user-search-input:focus {
+  outline: none;
+  border-color: #0f172a;
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08);
+}
+
+.user-search-input::placeholder {
+  color: #94a3b8;
+}
+
+.user-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+  max-height: 300px;
+  overflow-y: auto;
+  z-index: 100;
+  margin-top: 4px;
+}
+
+.user-dropdown-empty {
+  padding: 16px;
+  text-align: center;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.user-dropdown-item {
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.user-dropdown-item:last-child { border-bottom: none; }
+.user-dropdown-item:hover { background: #f8fafc; }
+.user-dropdown-item.selected { background: #f1f5f9; }
+
+.user-dropdown-item strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: #0f172a;
+}
+
+.user-dropdown-item span {
+  display: block;
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+/* Select User Prompt — empty state */
+.select-user-prompt {
+  background: white;
+  border: 2px dashed #e2e8f0;
+  border-radius: 16px;
+  padding: 80px 40px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.prompt-icon-circle {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.prompt-icon-circle svg {
+  width: 32px;
+  height: 32px;
+  color: #3b82f6;
+}
+
+.select-user-prompt h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 0 0 8px;
+}
+
+.select-user-prompt p {
+  font-size: 14px;
+  margin: 0;
+  color: #64748b;
+  max-width: 360px;
 }

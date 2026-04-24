@@ -354,8 +354,8 @@ function Analytics({ user, onLogout }) {
         <div className="content-header">
           <div>
             <h1>Analytics</h1>
+            <p className="content-subtitle">View detailed activity metrics for employees</p>
           </div>
-          <p className="content-subtitle-right">View detailed activity metrics for employees</p>
         </div>
 
         {/* User Selection */}
@@ -386,15 +386,15 @@ function Analytics({ user, onLogout }) {
                   filteredUsers.map(u => (
                     <div
                       key={u.id}
-                      className={`user-option ${selectedUserId === u.id ? 'selected' : ''}`}
+                      className={`user-dropdown-item ${selectedUserId === u.id ? 'selected' : ''}`}
                       onClick={() => selectUser(u)}
                     >
-                      <span className="user-name">{u.full_name}</span>
-                      <span className="user-email">{u.email}</span>
+                      <strong>{u.full_name}</strong>
+                      <span>{u.email}</span>
                     </div>
                   ))
                 ) : (
-                  <div className="no-users">No users found</div>
+                  <div className="user-dropdown-empty">No users found</div>
                 )}
               </div>
             )}
@@ -403,10 +403,10 @@ function Analytics({ user, onLogout }) {
 
         {!selectedUserId ? (
           <div className="select-user-prompt">
-            <div className="prompt-icon">
+            <div className="prompt-icon-circle">
               <Icons.Chart />
             </div>
-            <h2>Select an Employee</h2>
+            <h3>Select an Employee</h3>
             <p>Choose an employee from the dropdown above to view their activity analytics</p>
           </div>
         ) : (

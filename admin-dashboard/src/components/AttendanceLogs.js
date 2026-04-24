@@ -322,14 +322,16 @@ function AttendanceLogs({ user, onLogout }) {
 
       <div className="main-content">
         <div className="content-header">
-          <h1>Attendance & Logs</h1>
-          <p>Shift attendance and detailed activity logs</p>
+          <div>
+            <h1>Attendance & Logs</h1>
+            <p className="content-subtitle">Shift attendance and detailed activity logs</p>
+          </div>
         </div>
 
         {/* User Selection */}
-        <div className="al-user-selection">
+        <div className="user-selection-section">
           <label>Select Employee</label>
-          <div className="al-user-search-container" ref={userDropdownRef}>
+          <div className="user-search-container" ref={userDropdownRef}>
             <input
               type="text"
               placeholder="Search and select an employee..."
@@ -345,23 +347,23 @@ function AttendanceLogs({ user, onLogout }) {
                 }
               }}
               onFocus={() => setShowUserDropdown(true)}
-              className="al-user-search-input"
+              className="user-search-input"
             />
             {showUserDropdown && (
-              <div className="al-user-dropdown">
+              <div className="user-dropdown">
                 {filteredUsers.length > 0 ? (
                   filteredUsers.map(u => (
                     <div
                       key={u.id}
-                      className={`al-user-option ${selectedUserId === u.id ? 'selected' : ''}`}
+                      className={`user-dropdown-item ${selectedUserId === u.id ? 'selected' : ''}`}
                       onClick={() => selectUser(u)}
                     >
-                      <span className="al-user-name">{u.full_name}</span>
-                      <span className="al-user-email">{u.email}</span>
+                      <strong>{u.full_name}</strong>
+                      <span>{u.email}</span>
                     </div>
                   ))
                 ) : (
-                  <div className="al-no-users">No users found</div>
+                  <div className="user-dropdown-empty">No users found</div>
                 )}
               </div>
             )}
@@ -369,8 +371,18 @@ function AttendanceLogs({ user, onLogout }) {
         </div>
 
         {!selectedUserId ? (
-          <div className="al-empty-prompt">
-            <h2>Select an Employee</h2>
+          <div className="select-user-prompt">
+            <div className="prompt-icon-circle">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                <line x1="16" y1="2" x2="16" y2="6"/>
+                <line x1="8" y1="2" x2="8" y2="6"/>
+                <line x1="3" y1="10" x2="21" y2="10"/>
+                <polyline points="12 14 12 18"/>
+                <polyline points="10 16 12 18 14 16"/>
+              </svg>
+            </div>
+            <h3>Select an Employee</h3>
             <p>Choose an employee to view their shift attendance and activity logs</p>
           </div>
         ) : (

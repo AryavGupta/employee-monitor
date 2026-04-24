@@ -287,12 +287,6 @@ function Screenshots({ user, onLogout }) {
             <h1>Screenshots</h1>
             <p className="content-subtitle">View captured screenshots for the selected employees</p>
           </div>
-          <div className="header-right">
-            <span className="header-user-name">{filters.userName || user.fullName}</span>
-            <div className="header-avatar">
-              {(filters.userName || user.fullName)?.charAt(0).toUpperCase()}
-            </div>
-          </div>
         </div>
 
         {/* User Selection */}
@@ -433,7 +427,16 @@ function Screenshots({ user, onLogout }) {
             ) : (
               <div className="screenshots-grid">
                 {displayedScreenshots.length === 0 ? (
-                  <div className="no-data">No screenshots found for the selected filters</div>
+                  <div className="no-screenshots">
+                    <div className="prompt-icon-circle">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+                        <circle cx="12" cy="13" r="3"/>
+                      </svg>
+                    </div>
+                    <h3>No Screenshots Found</h3>
+                    <p>No screenshots match the selected filters. Try adjusting the date range or filters.</p>
+                  </div>
                 ) : (
                   displayedScreenshots.map((screenshot, index) => (
                     <div key={screenshot.id} className="screenshot-card" onClick={() => viewScreenshot(screenshot, index)}>
@@ -460,7 +463,12 @@ function Screenshots({ user, onLogout }) {
 
         {!filters.userId && (
           <div className="select-user-prompt">
-            <div className="prompt-icon">👆</div>
+            <div className="prompt-icon-circle">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+                <circle cx="12" cy="13" r="3"/>
+              </svg>
+            </div>
             <h3>Select an Employee</h3>
             <p>Search and select an employee above to view their screenshots</p>
           </div>
