@@ -4,6 +4,33 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-26 — Admin user deletion: actually deletes now (audit-log column drift)
+
+**Reported symptom:** Toast says "User deleted", but after refresh the user is still there and the count is unchanged. Earlier same-day cleanup commit (06bc568) was insufficient.
+
+**Root cause:** The new transactional delete inserted into `audit_logs (user_id, action, entity_type, entity_id, details)`. The schema-of-record (`supabase-schema.sql`) has `details JSONB`, but the **live Supabase DB** column is named `changes` — that column was renamed at some point and the schema file was never updated. The audit INSERT therefore failed with `42703 column "details" does not exist`. The error was caught silently by the inner `try/catch`. **But the txn was already in aborted state**, and `COMMIT` against an aborted txn silently rolls back (the `pg` driver returns the command tag `ROLLBACK` without throwing). End result: API returned `{ success: true }`, the user-facing toast fired, but every change in the txn — including `DELETE FROM users` — was discarded.
+
+**Why it matched the user-visible symptoms:** success toast (HTTP 200 returned), zero DB change (rolled back), and pages unchanged after refresh.
+
+**Fix (`admin-dashboard/api/routes/users.js`):**
+1. **`safe()` SAVEPOINT helper.** Every cleanup query is wrapped in `SAVEPOINT … RELEASE / ROLLBACK TO SAVEPOINT`. A `42P01` (missing table) or `42703` (missing column) rolls back only the inner savepoint, not the outer txn. Future schema drift can no longer poison the deletion.
+2. **Audit insert uses only the columns shared by every `INSERT INTO audit_logs` in the codebase** (`user_id, action, entity_type, entity_id`) — the same columns `auth.js` uses. No `details`/`changes` JSON payload, so the live/schema divergence is sidestepped entirely. Still wrapped in a savepoint as belt-and-suspenders.
+3. **Two more child tables added** (defensive, even though both also CASCADE): `screenshot_analyses`, `work_sessions`. Live FK audit also showed a duplicate `fk_user` (NO ACTION) constraint on `screenshots.user_id` alongside the CASCADE one — the explicit `DELETE FROM screenshots` step satisfies both.
+4. **`work_sessions.approved_by` (NO ACTION) added to nullableRefs.**
+
+**Why the user also reported "Delete button styling regressed":** The committed source (06bc568) already has `className="btn btn-secondary"` / `"btn btn-danger"`. The user was hitting either a Vercel deploy that hadn't rolled forward yet or a stale browser bundle. Pushing the backend change triggers a fresh Vercel build, which busts the bundle hash and forces the browser to re-fetch the latest `Users.js` / `Users.css`.
+
+**Files changed:**
+- `admin-dashboard/api/routes/users.js`
+
+**Validation (run against live DB, txn rolled back so nothing changes):**
+1. Replay the new flow with `safe()` savepoints — `DELETE FROM users` returns `rowCount=1`, the audit `INSERT INTO audit_logs (user_id, action, entity_type, entity_id)` succeeds (no longer references missing column), within-txn `SELECT FROM users WHERE id = $1` returns 0 rows. After ROLLBACK the user is restored — confirmed.
+2. Manual end-to-end after deploy: delete a non-admin employee, refresh — user gone from list, Total count decreases. Counts of `activity_logs`, `screenshots`, `sessions`, `user_presence` for that `user_id` are 0. `teams.manager_id` becomes NULL if the user managed a team. Self-delete still 400, admin-delete still 403.
+
+**Deploy:** Push to `main` — Vercel rebuilds API + frontend. No schema migration required.
+
+---
+
 ## 2026-04-26 — Admin user deletion: full cleanup + dialog button fix
 
 **Root cause of "Delete button not working":** Confirmation-dialog buttons used `className="btn-secondary"` / `className="btn-danger"` without the `btn` base class. The base `.btn` rule in `App.css` is what supplies `display: inline-flex`, padding, font-size, border-radius, cursor, transition. Without it, the buttons fell back to default browser styling — undersized, misaligned, and visually broken (which is what made the Delete button feel "not working"). The click handler itself was wired correctly.

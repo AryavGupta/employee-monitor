@@ -165,3 +165,8 @@ One-liners. Check before proposing changes — don't repeat.
 
 ### Serverless
 - **Never cache connections globally** (nodemailer transporter) — stale in serverless. Create fresh per request.
+
+### Postgres transactions
+- **Caught errors inside a txn still abort the txn.** A `try/catch` that swallows a query error (e.g. `42703 column does not exist`) hides the error from JS, but Postgres has already marked the surrounding transaction as aborted. Every subsequent query — *including `COMMIT`* — silently rolls back. The `pg` driver returns the command tag `ROLLBACK` for `COMMIT` on an aborted txn and does NOT throw. This is exactly how `DELETE /api/users/:id` returned `{success: true}` while never persisting the deletion: the audit-log INSERT used `details` (schema-of-record), but the live `audit_logs` column is named `changes`, the inner catch ate the 42703, COMMIT silently rolled back, and the success response went out anyway. Two rules:
+  1. **Wrap any non-essential query in a `SAVEPOINT … RELEASE / ROLLBACK TO SAVEPOINT`** if you intend to swallow its error. The savepoint contains the failure; the outer txn stays alive and commits cleanly. See `users.js` `safe()` helper.
+  2. **Never assume the schema-of-record (`supabase-schema.sql`) matches the live Supabase database** — column renames, missing migrations, and stale ALTERs accumulate. For audit-log writes specifically, only use the columns that every other `INSERT INTO audit_logs` call uses (`user_id, action, entity_type, entity_id` — see `auth.js`). Don't add `details`/`changes` JSON payloads unless you've confirmed the column exists in production.

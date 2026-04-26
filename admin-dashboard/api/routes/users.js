@@ -210,6 +210,26 @@ router.delete('/:id', authenticateToken, authorizeAdmin, async (req, res) => {
   }
 
   const client = await pool.connect();
+
+  // Run a query inside a SAVEPOINT so a 42P01 (missing table) or 42703
+  // (missing column) doesn't poison the surrounding txn. Without this,
+  // a single failure aborts the txn and every later query — including
+  // COMMIT — silently rolls back. That's exactly how the previous
+  // version returned `success: true` while the user row was never
+  // deleted (audit_logs.details didn't exist in the live schema).
+  const safe = async (label, sql, params) => {
+    await client.query(`SAVEPOINT ${label}`);
+    try {
+      const r = await client.query(sql, params);
+      await client.query(`RELEASE SAVEPOINT ${label}`);
+      return r;
+    } catch (err) {
+      await client.query(`ROLLBACK TO SAVEPOINT ${label}`).catch(() => {});
+      if (err.code === '42P01' || err.code === '42703') return null;
+      throw err;
+    }
+  };
+
   try {
     await client.query('BEGIN');
 
@@ -219,39 +239,38 @@ router.delete('/:id', authenticateToken, authorizeAdmin, async (req, res) => {
     }
     await client.query('UPDATE teams SET manager_id = NULL WHERE manager_id = $1', [id]);
 
-    // Explicit cleanup of user-owned data (defensive — covers tables where
-    // CASCADE may not be present in the deployed schema).
+    // Explicit cleanup of user-owned data. CASCADE handles most of these but
+    // a duplicate `fk_user` (NO ACTION) FK on screenshots in the live DB
+    // means we cannot rely on CASCADE alone — delete children first.
     const childTables = [
       'activity_logs',
       'screenshots',
+      'screenshot_analyses',
       'sessions',
+      'work_sessions',
       'user_presence',
       'productivity_metrics',
       'alerts',
     ];
     for (const t of childTables) {
-      try {
-        await client.query(`DELETE FROM ${t} WHERE user_id = $1`, [id]);
-      } catch (err) {
-        // 42P01 = undefined_table (table not present in this deployment) — skip.
-        if (err.code !== '42P01') throw err;
-      }
+      await safe(`del_${t}`, `DELETE FROM ${t} WHERE user_id = $1`, [id]);
     }
 
-    // Detach SET NULL references that point at this user (so the user row can drop).
+    // Detach SET NULL / NO ACTION references that point at this user.
     const nullableRefs = [
-      { table: 'alerts', column: 'resolved_by' },
+      { table: 'alerts',         column: 'resolved_by' },
       { table: 'app_categories', column: 'created_by' },
-      { table: 'alert_rules', column: 'created_by' },
-      { table: 'site_rules', column: 'created_by' },
-      { table: 'audit_logs', column: 'user_id' },
+      { table: 'alert_rules',    column: 'created_by' },
+      { table: 'site_rules',     column: 'created_by' },
+      { table: 'audit_logs',     column: 'user_id' },
+      { table: 'work_sessions',  column: 'approved_by' },
     ];
     for (const { table, column } of nullableRefs) {
-      try {
-        await client.query(`UPDATE ${table} SET ${column} = NULL WHERE ${column} = $1`, [id]);
-      } catch (err) {
-        if (err.code !== '42P01' && err.code !== '42703') throw err;
-      }
+      await safe(
+        `nul_${table}_${column}`,
+        `UPDATE ${table} SET ${column} = NULL WHERE ${column} = $1`,
+        [id]
+      );
     }
 
     const del = await client.query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
@@ -260,17 +279,16 @@ router.delete('/:id', authenticateToken, authorizeAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Audit (non-blocking semantics inside the txn — failure of the audit
-    // shouldn't roll back the deletion).
-    try {
-      await client.query(
-        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [req.user.userId, 'DELETE_USER', 'user', id, JSON.stringify({ email: userToDelete.email, full_name: userToDelete.full_name })]
-      );
-    } catch (auditErr) {
-      console.error('Audit log failed:', auditErr.message);
-    }
+    // Audit insert uses only columns guaranteed across deployments
+    // (matches the inserts in auth.js — older live DBs have `changes` JSONB,
+    // the schema-of-record has `details`; we use neither here). Wrapped in
+    // a SAVEPOINT so any future column drift can't roll back the delete.
+    await safe(
+      'audit',
+      `INSERT INTO audit_logs (user_id, action, entity_type, entity_id)
+       VALUES ($1, $2, $3, $4)`,
+      [req.user.userId, 'DELETE_USER', 'user', id]
+    );
 
     await client.query('COMMIT');
     res.json({ success: true, message: 'User deleted' });
