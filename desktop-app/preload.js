@@ -63,5 +63,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Sync-style request for the running app version. Used by every HTML
   // screen to render the top-right version badge so we can confirm at a
   // glance which build is installed.
-  getVersion: () => ipcRenderer.invoke('get-app-version')
+  getVersion: () => ipcRenderer.invoke('get-app-version'),
+
+  // Logged-in user identity (name + email) shown in the tracking screen.
+  getUserInfo: () => ipcRenderer.invoke('get-user-info')
 });

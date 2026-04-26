@@ -280,6 +280,13 @@ let browserUrlScriptPath = null;
 let isSuspended = false;
 let suspendTime = null;
 
+// Lock-screen tracking — prevents the secure-desktop "Unknown" row flood.
+// While the Windows lock screen is shown, GetForegroundWindow() returns 0
+// and the PowerShell active-window probe emits literal "Unknown" (see
+// trackActiveApplication). trackActivity / captureScreenshot / sendHeartbeat
+// must skip the app probe in that state. See BUG-2026-04-26-LOCKSCREEN-UNKNOWN.
+let isScreenLocked = false;
+
 // Get icon path, return undefined if not exists
 function getIconPath(filename) {
   const iconPath = path.join(__dirname, 'assets', filename);
@@ -776,6 +783,7 @@ function setupPowerMonitorHandlers() {
   powerMonitor.on('lock-screen', () => {
     console.log('Screen locked - marking as idle');
     isCurrentlyIdle = true;
+    isScreenLocked = true;
 
     if (CONFIG.USER_TOKEN) {
       axios.post(
@@ -790,6 +798,7 @@ function setupPowerMonitorHandlers() {
   powerMonitor.on('unlock-screen', () => {
     console.log('Screen unlocked - user returned');
     isCurrentlyIdle = false;
+    isScreenLocked = false;
 
     // Reset activity time to prevent counting locked period as activity gap
     lastActivityTime = Date.now();
@@ -1008,6 +1017,17 @@ ipcMain.on('get-tracking-status', (event) => {
 
 // App version (shown in top-right badge of every HTML screen)
 ipcMain.handle('get-app-version', () => app.getVersion());
+
+// Logged-in user identity (shown in top-left of tracking.html).
+// Returns null when no user is authenticated yet.
+ipcMain.handle('get-user-info', () => {
+  const u = CONFIG.USER_DATA;
+  if (!u) return null;
+  return {
+    fullName: u.fullName || u.full_name || '',
+    email: u.email || ''
+  };
+});
 
 // Change password handler
 ipcMain.on('change-password', async (event, { currentPassword, newPassword }) => {
@@ -1425,6 +1445,9 @@ async function captureScreenshot() {
   // (BUG-2026-04-21-05 resume-handler race), don't actually capture/upload.
   // Screenshots outside working hours on a no-overtime team are pure noise.
   if (!isTracking) return;
+  // Lock screen on Windows runs on a secure desktop that desktopCapturer
+  // cannot read — captures are either black or fail. Skip outright.
+  if (isScreenLocked) return;
   try {
     // Capture ALL displays. Previously hardcoded sources[0] which silently
     // ignored secondary monitors — managers couldn't audit dual-display setups.
@@ -2563,6 +2586,13 @@ async function trackActivity() {
   // state (e.g. after pauseTrackingForLogout but before interval was cleared).
   if (!isTracking) return;
 
+  // Lock screen → secure desktop → GetForegroundWindow returns 0 → the PS
+  // probe emits literal "Unknown". Skipping the row here is the fix for the
+  // 35–41% Unknown rate observed on long-shift / NULL-team users (lunch
+  // breaks, overnight locked machines on no-team users with no working-hours
+  // gate). See BUG-2026-04-26-LOCKSCREEN-UNKNOWN.
+  if (isScreenLocked) return;
+
   // Calculate duration FIRST — this must always succeed so we never lose time
   const now = Date.now();
   const durationSeconds = Math.round((now - lastActivityTime) / 1000);
@@ -2784,11 +2814,18 @@ async function sendHeartbeat() {
   // dashboard status to logged_out.
   if (!isTracking) return;
   try {
-    const appInfo = await trackActiveApplication();
+    // Lock screen → don't probe the secure desktop. Send a minimal idle
+    // heartbeat so the dashboard keeps the user marked online (not stale)
+    // but without writing literal "Unknown" into user_presence.current_application.
+    let appInfo;
     let currentUrl = null;
-
-    if (teamSettings?.track_urls !== false) {
-      currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle, appInfo.hwnd, appInfo.processName);
+    if (isScreenLocked) {
+      appInfo = { appName: null, windowTitle: null, hwnd: null, processName: null };
+    } else {
+      appInfo = await trackActiveApplication();
+      if (teamSettings?.track_urls !== false) {
+        currentUrl = await extractBrowserUrl(appInfo.appName, appInfo.windowTitle, appInfo.hwnd, appInfo.processName);
+      }
     }
 
     const idleSeconds = getSystemIdleTime();

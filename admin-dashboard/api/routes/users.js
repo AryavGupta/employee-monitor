@@ -187,54 +187,105 @@ router.patch('/:id', authenticateToken, authorizeAdmin, async (req, res) => {
   }
 });
 
-// Delete user (admin only)
+// Delete user (admin only) — full cleanup: detach from team, remove all related
+// rows, then delete the user. Transactional so a failure rolls back cleanly.
+// We don't trust CASCADE alone because legacy/older deployments may have rows
+// in tables that were created before the FK was added with ON DELETE CASCADE.
 router.delete('/:id', authenticateToken, authorizeAdmin, async (req, res) => {
-  try {
-    const pool = req.app.locals.pool;
-    const { id } = req.params;
+  const pool = req.app.locals.pool;
+  const { id } = req.params;
 
-    // Compare as strings to handle UUID comparison
-    if (String(id) === String(req.user.userId)) {
-      return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
+  if (String(id) === String(req.user.userId)) {
+    return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
+  }
+
+  const userCheck = await pool.query('SELECT id, email, full_name, role, team_id FROM users WHERE id = $1', [id]);
+  if (userCheck.rows.length === 0) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  const userToDelete = userCheck.rows[0];
+  if (userToDelete.role === 'admin') {
+    return res.status(403).json({ success: false, message: 'Cannot delete admin users. Demote them first.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Detach from team first (per requirement) and clear any team-manager pointer.
+    if (userToDelete.team_id) {
+      await client.query('UPDATE users SET team_id = NULL WHERE id = $1', [id]);
+    }
+    await client.query('UPDATE teams SET manager_id = NULL WHERE manager_id = $1', [id]);
+
+    // Explicit cleanup of user-owned data (defensive — covers tables where
+    // CASCADE may not be present in the deployed schema).
+    const childTables = [
+      'activity_logs',
+      'screenshots',
+      'sessions',
+      'user_presence',
+      'productivity_metrics',
+      'alerts',
+    ];
+    for (const t of childTables) {
+      try {
+        await client.query(`DELETE FROM ${t} WHERE user_id = $1`, [id]);
+      } catch (err) {
+        // 42P01 = undefined_table (table not present in this deployment) — skip.
+        if (err.code !== '42P01') throw err;
+      }
     }
 
-    // Check if user exists and get their role
-    const userCheck = await pool.query('SELECT id, email, role FROM users WHERE id = $1', [id]);
-    if (userCheck.rows.length === 0) {
+    // Detach SET NULL references that point at this user (so the user row can drop).
+    const nullableRefs = [
+      { table: 'alerts', column: 'resolved_by' },
+      { table: 'app_categories', column: 'created_by' },
+      { table: 'alert_rules', column: 'created_by' },
+      { table: 'site_rules', column: 'created_by' },
+      { table: 'audit_logs', column: 'user_id' },
+    ];
+    for (const { table, column } of nullableRefs) {
+      try {
+        await client.query(`UPDATE ${table} SET ${column} = NULL WHERE ${column} = $1`, [id]);
+      } catch (err) {
+        if (err.code !== '42P01' && err.code !== '42703') throw err;
+      }
+    }
+
+    const del = await client.query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
+    if (del.rowCount === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const userToDelete = userCheck.rows[0];
-
-    // Prevent deleting other admins (optional safety measure)
-    if (userToDelete.role === 'admin') {
-      return res.status(403).json({ success: false, message: 'Cannot delete admin users. Demote them first.' });
-    }
-
-    // Delete the user (CASCADE will handle related records)
-    await pool.query('DELETE FROM users WHERE id = $1', [id]);
-
-    // Log the deletion (non-blocking - don't fail delete if audit fails)
+    // Audit (non-blocking semantics inside the txn — failure of the audit
+    // shouldn't roll back the deletion).
     try {
-      await pool.query(
-        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id) VALUES ($1, $2, $3, $4)`,
-        [req.user.userId, 'DELETE_USER', 'user', id]
+      await client.query(
+        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [req.user.userId, 'DELETE_USER', 'user', id, JSON.stringify({ email: userToDelete.email, full_name: userToDelete.full_name })]
       );
     } catch (auditErr) {
       console.error('Audit log failed:', auditErr.message);
     }
 
-    res.json({ success: true, message: `User ${userToDelete.email} deleted successfully` });
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'User deleted' });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('Delete user error:', error);
-    // Handle foreign key constraint errors
     if (error.code === '23503') {
       return res.status(400).json({
         success: false,
-        message: 'Cannot delete user: they have related records that must be deleted first'
+        message: 'Cannot delete user: related records still reference this user'
       });
     }
     res.status(500).json({ success: false, message: 'Failed to delete user' });
+  } finally {
+    client.release();
   }
 });
 

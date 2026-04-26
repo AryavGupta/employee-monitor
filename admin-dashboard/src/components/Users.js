@@ -30,6 +30,7 @@ function Users({ user, onLogout }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   useBodyScrollLock(showModal || showDeleteConfirm);
   const [userToDelete, setUserToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -80,7 +81,7 @@ function Users({ user, onLogout }) {
   useEffect(() => {
     const handleEscKey = (e) => {
       if (e.key === 'Escape') {
-        if (showDeleteConfirm) {
+        if (showDeleteConfirm && !deleting) {
           setShowDeleteConfirm(false);
           setUserToDelete(null);
         } else if (showModal) {
@@ -90,7 +91,7 @@ function Users({ user, onLogout }) {
     };
     document.addEventListener('keydown', handleEscKey);
     return () => document.removeEventListener('keydown', handleEscKey);
-  }, [showDeleteConfirm, showModal]);
+  }, [showDeleteConfirm, showModal, deleting]);
 
   const handleCreateUser = () => {
     setSelectedUser(null);
@@ -116,15 +117,16 @@ function Users({ user, onLogout }) {
   };
 
   const handleDeleteConfirm = async () => {
-    if (!userToDelete) return;
+    if (!userToDelete || deleting) return;
 
+    setDeleting(true);
     try {
       const token = localStorage.getItem('token');
       await axios.delete(`${API_URL}/api/users/${userToDelete.id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      setSuccess(`${userToDelete.full_name} has been deleted`);
+      setSuccess('User deleted');
       setShowDeleteConfirm(false);
       setUserToDelete(null);
       fetchUsers();
@@ -135,7 +137,15 @@ function Users({ user, onLogout }) {
       setUserToDelete(null);
       setError(err.response?.data?.message || 'Failed to delete user');
       setTimeout(() => setError(''), 5000);
+    } finally {
+      setDeleting(false);
     }
+  };
+
+  const handleDeleteCancel = () => {
+    if (deleting) return;
+    setShowDeleteConfirm(false);
+    setUserToDelete(null);
   };
 
   const handleToggleActive = async (userId, isActive) => {
@@ -437,11 +447,21 @@ function Users({ user, onLogout }) {
               <h2>Delete Employee</h2>
               <p>Are you sure you want to delete <strong>{userToDelete?.full_name}</strong>? This action cannot be undone and will remove all associated data.</p>
               <div className="modal-actions">
-                <button className="btn-secondary" onClick={() => setShowDeleteConfirm(false)}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleDeleteCancel}
+                  disabled={deleting}
+                >
                   Cancel
                 </button>
-                <button className="btn-danger" onClick={handleDeleteConfirm}>
-                  Delete Employee
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  onClick={handleDeleteConfirm}
+                  disabled={deleting}
+                >
+                  {deleting ? 'Deleting…' : 'Delete Employee'}
                 </button>
               </div>
             </div>

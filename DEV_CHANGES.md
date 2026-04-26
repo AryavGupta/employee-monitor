@@ -4,6 +4,117 @@ Append-only log. Newest first.
 
 ---
 
+## 2026-04-26 — Admin user deletion: full cleanup + dialog button fix
+
+**Root cause of "Delete button not working":** Confirmation-dialog buttons used `className="btn-secondary"` / `className="btn-danger"` without the `btn` base class. The base `.btn` rule in `App.css` is what supplies `display: inline-flex`, padding, font-size, border-radius, cursor, transition. Without it, the buttons fell back to default browser styling — undersized, misaligned, and visually broken (which is what made the Delete button feel "not working"). The click handler itself was wired correctly.
+
+**Backend (`admin-dashboard/api/routes/users.js`)** — `DELETE /api/users/:id` rewritten with transactional cleanup. Old code relied solely on `ON DELETE CASCADE` and ran a single un-transacted `DELETE FROM users`. New flow inside a `BEGIN/COMMIT`:
+1. `UPDATE users SET team_id = NULL` (detach from team per spec)
+2. `UPDATE teams SET manager_id = NULL WHERE manager_id = $1` (clear manager pointer)
+3. Explicit `DELETE FROM` of `activity_logs`, `screenshots`, `sessions`, `user_presence`, `productivity_metrics`, `alerts` by `user_id`. Per-table try/catch swallows `42P01` (table not present in this deployment) but rethrows everything else.
+4. Null SET-NULL refs: `alerts.resolved_by`, `app_categories.created_by`, `alert_rules.created_by`, `site_rules.created_by`, `audit_logs.user_id`. Swallows `42P01`/`42703`.
+5. `DELETE FROM users WHERE id = $1 RETURNING id` — rolls back if rowCount=0.
+6. Audit log insert is non-fatal (caught locally) so the deletion still commits if `audit_logs` write fails.
+7. Self-delete (400) and admin-delete (403) guards retained.
+8. Response: `{ success: true, message: 'User deleted' }`.
+
+**Frontend (`admin-dashboard/src/components/Users.js`)**:
+- Modal buttons now `className="btn btn-secondary"` / `"btn btn-danger"`.
+- New `deleting` state; both buttons disabled during the request, Delete shows `Deleting…`, ESC suppressed mid-request to prevent double-fire.
+- Toast text now reads `User deleted` per spec.
+- New `handleDeleteCancel` so cancel/ESC paths share one place that respects the `deleting` flag.
+
+**CSS (`admin-dashboard/src/components/Users.css`)** — added `.delete-modal .modal-actions .btn` rule giving both buttons equal `flex: 1 1 0`, fixed `height: 42px`, identical padding/font/border-radius so Cancel and Delete are visually symmetrical.
+
+**Files changed:**
+- `admin-dashboard/api/routes/users.js`
+- `admin-dashboard/src/components/Users.js`
+- `admin-dashboard/src/components/Users.css`
+
+**Validation:**
+- Delete an employee with screenshots + activity logs + sessions + a presence row → `SELECT COUNT(*) FROM <table> WHERE user_id = '<deleted>'` should be 0 for each.
+- Delete a user who is a team manager → `teams.manager_id` becomes NULL; team itself and other members untouched.
+- Try to delete self → 400. Try to delete an admin → 403.
+- Toast on success reads exactly "User deleted".
+- Cancel and Delete buttons same height, same padding; Delete clickable across full visible area.
+- Dashboard, analytics, attendance, screenshots pages still load with no console errors after deletion.
+
+**Deploy:** Vercel auto-deploys from `main`. No schema migration required — fix is defensive against missing CASCADE.
+
+---
+
+## 2026-04-26 — Fix: lock-screen produces "Unknown" activity rows (BUG-2026-04-26-LOCKSCREEN-UNKNOWN)
+
+**Reported symptom:** Activity logs intermittently show `application_name = 'Unknown'`. Concentrated on long-shift teams (Morning, 11AM–08PM) and on users with no team assigned. Screenshots unaffected.
+
+**Live data confirmed the pattern (last 7d):**
+
+| Team | Unknown | Total | % |
+|---|---|---|---|
+| (NULL — no team) | 5980 | 14513 | 41.20 |
+| New morning team | 6457 | 17940 | 35.99 |
+| 11Am-08PM | 8424 | 50593 | 16.65 |
+| Evening | 44 | 19058 | 0.23 |
+| 10:30PM-07:30AM | 25 | 53693 | 0.05 |
+| 1PM-7PM | 4 | 10990 | 0.04 |
+
+**Root cause.** `powerMonitor.on('lock-screen', …)` only flipped `isCurrentlyIdle = true` and pinged one heartbeat. It did NOT pause `activityInterval` (10s), `screenshotInterval` (60s), or stop the periodic heartbeat's app probe. While Windows showed the lock screen, every 10s tick of `trackActivity()` ran:
+
+1. `GetForegroundWindow()` → `0` (secure desktop is isolated from the user session).
+2. `GetProcessById(0)` → throws (System Idle Process can't be queried). Caught.
+3. PowerShell script's `$pName` stayed at the literal initialisation `'Unknown'` (line 1974 of `desktop-app/main.js`).
+4. Script emitted `{"DisplayName":"Unknown","ProcessName":"Unknown",...}`.
+5. Node returned `appName: 'Unknown'`. Row inserted with `application_name = 'Unknown'`, `is_idle = true`, `window_title = ''`.
+
+Why the rate scales with team:
+- **NULL team** has no `team_monitoring_settings` row → `shouldTrackNow()` returns true 24/7 → the machine sits locked overnight ~14h → flood.
+- **Morning/long shifts** straddle lunch (~1h locked) + multiple short breaks + the AM password-entry window before Windows is unlocked.
+- **Evening / Night / Afternoon shifts** are short or compressed; outside the shift window `shouldTrackNow()` is false so locked-machine ticks aren't logged at all → near-zero.
+
+Why screenshots were unaffected: Electron's `desktopCapturer` cannot read the Windows secure desktop, so locked-state captures fail or return black — they don't produce misleading rows the way the activity probe did.
+
+**Fix (`desktop-app/main.js`):**
+1. New `isScreenLocked` boolean (defaults false).
+2. `powerMonitor.on('lock-screen')` sets it true; `unlock-screen` clears it. Existing idle/heartbeat behavior preserved.
+3. `trackActivity()` early-returns when `isScreenLocked` (mirrors the existing `if (!isTracking) return` defense from BUG-2026-04-21-05).
+4. `captureScreenshot()` early-returns when `isScreenLocked` — secure desktop captures are useless anyway.
+5. `sendHeartbeat()` skips the `trackActiveApplication()` probe when locked and posts the heartbeat with `current_application: null`. Presence stays online (no false "disconnected" status while at lunch); `user_presence.current_application` stops being overwritten with `'Unknown'`.
+
+**Files:** `desktop-app/main.js` (state declaration, two power-monitor handlers, three intervals).
+
+**Validation:**
+- Lock screen with `Win+L` → tail desktop log → `'Screen locked - marking as idle'` appears, then no further `Sending activity batch` / `Sent N activity logs` lines until unlock.
+- DB check during lock: `SELECT COUNT(*) FROM activity_logs WHERE user_id = '<me>' AND timestamp >= '<lock_ts>'` should stay flat.
+- Unlock → activity tracking resumes within ≤10s.
+- Dashboard "Live" tab: user remains `online`/`idle` while locked (heartbeat still flowing), does NOT flip to `logged_out`.
+- Re-run the team-rate query 24h after rollout — Morning/NULL buckets should drop by an order of magnitude.
+
+**Followup (separate task — flagged, not implemented here):**
+- The NULL-team bucket (41% Unknown) is symptomatic of users with no team assignment running 24/7. Even with this fix, NULL-team users will still produce overnight ghost rows for legitimate-but-empty foreground apps (a screen saver registered as a process, etc.). Audit `users` for `team_id IS NULL` and either assign or block their tracking.
+
+**Deploy:** desktop-only. Per [batch desktop builds] feedback, do NOT bump version or run `build:desktop` in isolation — bundle with the user-identity-badge change from earlier today and any other pending desktop edits before the next installer.
+
+---
+
+## 2026-04-26 — Desktop user identity badge (top-left)
+
+Tracking screen now shows the logged-in user's full name + email in a top-left badge, mirroring the visual style of the existing top-right version badge so the two read as a matched pair.
+
+- New IPC: `get-user-info` returns `{ fullName, email }` from `CONFIG.USER_DATA` (null when unauthenticated). Exposed to the renderer via `preload.js → window.electronAPI.getUserInfo`.
+- `tracking.html` renders a fixed `.user-badge` (top: 10px, left: 14px) with two stacked lines. Font sizes use `clamp(11px, 3.2vw, 13px)` / `clamp(9px, 2.6vw, 11px)` so the text scales with window width but stays bounded. Badge is `max-width: calc(100vw - 110px)` to reserve room for the version badge on the right; long names/emails ellipsize.
+- Badge is hidden until `getUserInfo()` resolves with non-empty data, so unauthenticated states don't flash an empty pill.
+
+Files: `desktop-app/main.js` (IPC handler near `get-app-version`), `desktop-app/preload.js`, `desktop-app/tracking.html`.
+
+**Deploy:** desktop-only. No DB or backend change. Per [batch desktop builds] feedback — do NOT bump version or run `build:desktop` for this alone; bundle with the next batch.
+
+**Validation:**
+- Launch tracking screen post-login → badge appears top-left with name (bold) + email (lighter) on dark pill.
+- Resize the 400px-wide window narrower → text shrinks via clamp, never overflows under the version badge.
+- Log out / fresh install with no stored creds → tracking screen never shows empty badge (login screen runs first; if `tracking.html` ever loads pre-auth, `userBadge` stays `.hidden`).
+
+---
+
 ## 2026-04-21 — /sessions/end end_time uses evidence-of-life (BUG-06)
 
 `POST /api/sessions/end` previously wrote `end_time = GREATEST(CURRENT_TIMESTAMP, start_time)`. Usually fine — `CURRENT_TIMESTAMP` is within seconds of the real session end when the desktop calls /end from an online, tracking state.

@@ -189,6 +189,45 @@
       pointer-events: none;
     }
 
+    .user-badge {
+      position: fixed;
+      top: 10px;
+      left: 14px;
+      max-width: calc(100vw - 110px);
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      padding: 4px 10px;
+      background: rgba(0, 0, 0, 0.28);
+      border-radius: 10px;
+      color: rgba(255, 255, 255, 0.95);
+      z-index: 9999;
+      pointer-events: none;
+      line-height: 1.2;
+    }
+
+    .user-badge .user-name {
+      font-size: clamp(11px, 3.2vw, 13px);
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .user-badge .user-email {
+      font-size: clamp(9px, 2.6vw, 11px);
+      font-weight: 400;
+      opacity: 0.8;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .user-badge.hidden {
+      display: none;
+    }
+
     .time-stats {
       display: flex;
       gap: 10px;
@@ -267,16 +306,35 @@
     </div>
   </div>
 
+  <div class="user-badge hidden" id="userBadge">
+    <div class="user-name" id="userName"></div>
+    <div class="user-email" id="userEmail"></div>
+  </div>
+
   <div class="version-badge" id="versionBadge">v—</div>
 
   <script>
     // Use secure electronAPI exposed via preload script (no direct Node.js access)
-    const { send, on, getVersion } = window.electronAPI;
+    const { send, on, getVersion, getUserInfo } = window.electronAPI;
 
     if (getVersion) {
       getVersion().then(v => {
         const el = document.getElementById('versionBadge');
         if (el && v) el.textContent = `v${v}`;
+      }).catch(() => {});
+    }
+
+    if (getUserInfo) {
+      getUserInfo().then(u => {
+        if (!u || (!u.fullName && !u.email)) return;
+        const badge = document.getElementById('userBadge');
+        const nameEl = document.getElementById('userName');
+        const emailEl = document.getElementById('userEmail');
+        if (u.fullName) nameEl.textContent = u.fullName;
+        else nameEl.style.display = 'none';
+        if (u.email) emailEl.textContent = u.email;
+        else emailEl.style.display = 'none';
+        badge.classList.remove('hidden');
       }).catch(() => {});
     }
 
